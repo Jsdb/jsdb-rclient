@@ -301,7 +301,22 @@ export class RDb3Root {
         }
     }
 
+    static create(conf :any) {
+        return new RDb3Root(conf.socket, conf.baseUrl);
+    }
+
 }
+
+var glb :any = typeof window !== 'undefined' ? window : global; 
+if (glb || typeof(require) !== 'undefined') {
+    try {
+        var TsdbImpl = glb['Tsdb'] || require('./Tsdb');
+        TsdbImpl.Spi.registry['rclient'] = RDb3Root.create;
+    } catch (e) {}
+}
+
+
+
 
 export class Subscription {
 

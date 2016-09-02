@@ -38,6 +38,7 @@ export declare class RDb3Root {
     broadcastChildMoved(path: string, child: string, val: any, queryPath: string, prevChildName?: string): void;
     broadcastChildRemoved(path: string, child: string, val: any, queryPath: string): void;
     broadcast(path: string, type: string, snapProvider: () => RDb3Snap, prevChildName?: string): void;
+    static create(conf: any): RDb3Root;
 }
 export declare class Subscription {
     root: RDb3Root;

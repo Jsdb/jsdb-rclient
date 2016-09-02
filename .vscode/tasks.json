@@ -13,7 +13,7 @@
             "problemMatcher": "$tsc"
         },
         {
-            "taskName": "ts",
+            "taskName": "default",
             "args": [],
             "isBuildCommand": true,
             "problemMatcher": "$tsc"
