@@ -1,0 +1,35 @@
+{
+  "name": "jsdb-rclient",
+  "description": "",
+  "main": "js/main/Client.js",
+  "authors": [
+    "Simone Gianni"
+  ],
+  "license": "private",
+  "keywords": [
+    "db",
+    "orm",
+    "jsdb",
+    "typescript",
+    "tsdb"
+  ],
+  "moduleType": [
+    "amd",
+    "globals",
+    "node"
+  ],
+  "homepage": "",
+  "private": true,
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "typescript": {
+    "definitions": [ 
+      "js/main/Client.d.ts"
+    ]
+  }
+}
