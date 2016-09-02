@@ -1,0 +1,64 @@
+{
+  "name": "jsdb-rclient",
+  "version": "1.0.0",
+  "description": "",
+  "gulp_data": {
+    "fullName": "TsDb Remote Client",
+    "paths": {
+      "tests": [
+        "./js/test/ClientTests.js"
+      ],
+      "mainDts": null
+    }
+  },
+  "main": "js/main/Client.js",
+  "scripts": {
+    "test": "gulp test"
+  },
+  "author": "Simone Gianni",
+  "license": "private",
+  "private": true,
+  "dependencies": {
+    "es6-promise": "^2.3.0",
+    "firebase": "^2.4.2",
+    "socket.io-client": "^1.3.5"
+  },
+  "devDependencies": {
+    "del": "1.2.0",
+    "dts-bundle": "^0.3.0",
+    "gulp": "3.9.0",
+    "gulp-istanbul": "^0.10.0",
+    "gulp-mocha": "^2.1.3",
+    "gulp-replace": "^0.5.4",
+    "gulp-sourcemaps": "~1.6.0",
+    "gulp-spawn-mocha": "~2.2.1",
+    "gulp-tslint": "3.0.1-beta",
+    "gulp-typedoc": "^2.0.0",
+    "gulp-typescript": "2.13.6",
+    "gulp-util": "2.2.14",
+    "gulp-wait": "0.0.2",
+    "merge2": "^0.3.6",
+    "moment": "^2.10.6",
+    "run-sequence": "1.1.1",
+    "sync-exec": "^0.6.2",
+    "tsMatchers": "SimoneGianni/tsMatchers",
+    "typescript": "~1.8.10",
+    "socket.io": "^1.3.5"
+  },
+  "config": {
+    "blanket": {
+      "pattern": [
+        ""
+      ],
+      "data-cover-never": [
+        "node_modules"
+      ]
+    }
+  },
+  "typescript": {
+    "definitions": [
+      "js/main/jsdb.d.ts",
+      "js/main/Tsdb.d.ts"
+    ]
+  }
+}
