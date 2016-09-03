@@ -3,6 +3,8 @@
  * TSDB remote client VERSION_TAG 
  */
 
+import {Spi} from 'jsdb';
+
 type BroadcastCb = (sub :Subscription, acpath :string, acval:any)=>void;
 
 export interface Socket {
@@ -10,7 +12,7 @@ export interface Socket {
     emit(event :string, ...args :any[]) :any;
 }
 
-export class RDb3Root {
+export class RDb3Root implements Spi.DbTreeRoot {
 
     static VERSION = 'VERSION_TAG';
 
@@ -449,7 +451,7 @@ var cbHandlers = {
 }
 
 
-export class RDb3Snap {
+export class RDb3Snap implements Spi.DbTreeSnap {
     constructor(
         private data: any,
         private root: RDb3Root,
@@ -596,7 +598,7 @@ function isIncomplete(obj :any) :boolean {
 }
 
 
-export class RDb3Tree {
+export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
 
     constructor(
         public root: RDb3Root,
@@ -759,6 +761,10 @@ export class RDb3Tree {
     */
     remove(onComplete?: (error: any) => void): void {
         this.set(null, onComplete);
+    }
+
+    child(path :string) {
+        return new RDb3Tree(this.root, this.url + Utils.normalizePath(path));
     }
 
 }
