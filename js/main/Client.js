@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160903_171129_master_1.0.0_02a6940
+ * TSDB remote client 20160903_174659_master_1.0.0_50f659a
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,6 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
+    exports.VERSION = '20160903_174659_master_1.0.0_50f659a';
     var RDb3Root = (function () {
         function RDb3Root(sock, baseUrl) {
             var _this = this;
@@ -294,14 +295,13 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Root.create = function (conf) {
             return new RDb3Root(conf.socket, conf.baseUrl);
         };
-        RDb3Root.VERSION = '20160903_171129_master_1.0.0_02a6940';
         return RDb3Root;
     }());
     exports.RDb3Root = RDb3Root;
     var glb = typeof window !== 'undefined' ? window : global;
     if (glb || typeof (require) !== 'undefined') {
         try {
-            var TsdbImpl = glb['Tsdb'] || require('./Tsdb');
+            var TsdbImpl = glb['Tsdb'] || require('jsdb');
             TsdbImpl.Spi.registry['rclient'] = RDb3Root.create;
         }
         catch (e) { }

@@ -12,9 +12,9 @@ export interface Socket {
     emit(event :string, ...args :any[]) :any;
 }
 
-export class RDb3Root implements Spi.DbTreeRoot {
+export var VERSION = 'VERSION_TAG';
 
-    static VERSION = 'VERSION_TAG';
+export class RDb3Root implements Spi.DbTreeRoot {
 
     constructor(private sock :Socket, private baseUrl :string) {
         if (sock) {
@@ -312,7 +312,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
 var glb :any = typeof window !== 'undefined' ? window : global; 
 if (glb || typeof(require) !== 'undefined') {
     try {
-        var TsdbImpl = glb['Tsdb'] || require('./Tsdb');
+        var TsdbImpl = glb['Tsdb'] || require('jsdb');
         TsdbImpl.Spi.registry['rclient'] = RDb3Root.create;
     } catch (e) {}
 }

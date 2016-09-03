@@ -1,15 +1,15 @@
 /**
- * TSDB remote client 20160903_171129_master_1.0.0_02a6940
+ * TSDB remote client 20160903_174659_master_1.0.0_50f659a
  */
 import { Spi } from 'jsdb';
 export interface Socket {
     on(event: string, cb: (...args: any[]) => any): any;
     emit(event: string, ...args: any[]): any;
 }
+export declare var VERSION: string;
 export declare class RDb3Root implements Spi.DbTreeRoot {
     private sock;
     private baseUrl;
-    static VERSION: string;
     constructor(sock: Socket, baseUrl: string);
     private subscriptions;
     private data;
