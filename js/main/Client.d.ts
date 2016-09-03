@@ -1,8 +1,12 @@
+/**
+ * TSDB remote client 20160903_171129_master_1.0.0_02a6940
+ */
+import { Spi } from 'jsdb';
 export interface Socket {
     on(event: string, cb: (...args: any[]) => any): any;
     emit(event: string, ...args: any[]): any;
 }
-export declare class RDb3Root {
+export declare class RDb3Root implements Spi.DbTreeRoot {
     private sock;
     private baseUrl;
     static VERSION: string;
@@ -63,7 +67,7 @@ export declare abstract class Handler {
     protected getValue(): any;
     abstract init(): void;
 }
-export declare class RDb3Snap {
+export declare class RDb3Snap implements Spi.DbTreeSnap {
     private data;
     private root;
     private url;
@@ -75,7 +79,7 @@ export declare class RDb3Snap {
     key(): string;
     ref(): RDb3Tree;
 }
-export declare class RDb3Tree {
+export declare class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     root: RDb3Root;
     url: string;
     constructor(root: RDb3Root, url: string);
@@ -132,6 +136,7 @@ export declare class RDb3Tree {
     * Removes the data at this DbTree location.
     */
     remove(onComplete?: (error: any) => void): void;
+    child(path: string): RDb3Tree;
 }
 export declare class QuerySubscription extends Subscription {
     id: string;

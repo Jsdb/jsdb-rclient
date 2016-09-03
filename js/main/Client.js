@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160902_125625_master_1.0.0_d771ec4
+ * TSDB remote client 20160903_171129_master_1.0.0_02a6940
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -294,7 +294,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Root.create = function (conf) {
             return new RDb3Root(conf.socket, conf.baseUrl);
         };
-        RDb3Root.VERSION = '20160902_125625_master_1.0.0_d771ec4';
+        RDb3Root.VERSION = '20160903_171129_master_1.0.0_02a6940';
         return RDb3Root;
     }());
     exports.RDb3Root = RDb3Root;
@@ -730,6 +730,9 @@ var __extends = (this && this.__extends) || function (d, b) {
         */
         RDb3Tree.prototype.remove = function (onComplete) {
             this.set(null, onComplete);
+        };
+        RDb3Tree.prototype.child = function (path) {
+            return new RDb3Tree(this.root, this.url + Utils.normalizePath(path));
         };
         return RDb3Tree;
     }());
