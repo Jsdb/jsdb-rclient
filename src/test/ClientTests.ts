@@ -1,3 +1,7 @@
+import * as Debug from 'debug';
+
+Debug.enable('tsdb:*');
+
 import * as Client from '../main/Client';
 import * as SocketIO from 'socket.io';
 import * as SocketIOClient from 'socket.io-client';
@@ -194,6 +198,33 @@ describe('RDb3Client >', () => {
                 assert("Should not receive another event", snap, is.falsey);
             });
 
+            it('Should off the right event', ()=>{
+                var ref = root.getUrl('/node');
+                var evts :string[] = [];
+                var fn_value = ref.on('value', (data) => evts.push('v'));
+                var fn_child_added = ref.on('child_added', (data) => evts.push('ca'));
+                var fn_child_removed = ref.on('child_removed', (data) => evts.push('cr'));
+                root.handleChange('/node', {a:1});
+                root.handleChange('/node', {c:3});
+
+                assert("Right events in right order", evts, is.array.equals(['ca','v','ca','cr','v']));
+
+                ref.off('value', fn_value);
+                evts = [];
+
+                root.handleChange('/node', {d:5});
+
+                assert("Right events in right order", evts, is.array.equals(['ca','cr']));
+
+                ref.off('child_added', fn_child_added);
+                ref.off('child_removed', fn_child_removed);
+                evts = [];
+
+                root.handleChange('/node', {e:5});
+
+                assert("No more events", evts, is.array.withLength(0));
+            });
+
             it('Should send a value event for already existing data', () => {
                 root.handleChange('/node/data', 'ciao');
                 var ref = root.getUrl('/node/data');
@@ -250,6 +281,16 @@ describe('RDb3Client >', () => {
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
                 assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
+            });
+
+            it('Should send a value event for confirmed null', () => {
+                var ref = root.getUrl('/node');
+                var snap: Client.RDb3Snap;
+                ref.on('value', (data) => snap = data);
+                root.handleChange('/node', null);
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is non existing", snap.exists(), false);
             });
 
         });
@@ -480,6 +521,40 @@ describe('RDb3Client >', () => {
             });
         });
 
+        describe('Filters >', ()=>{
+            it('Should return only "valued" entries', ()=>{
+                var ref = root.getUrl('/users');
+
+                root.handleChange('/users', { u1: {name: 'sara'}, u2: {name: 'simone'}});
+
+                
+                ref = ref.orderByChild('name').equalTo('mario');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var adds :Client.RDb3Snap[] = [];
+                var vals :Client.RDb3Snap[] = [];
+                ref.on('child_added', (data,prek) => {adds.push(data)});
+                ref.on('value', (data,prek) => {vals.push(data)});
+
+                assert("Should have sent no values", vals, is.array.withLength(0));
+                assert("Should have sent no added", adds, is.array.withLength(0));
+
+                root.handleQueryChange('1a', '/list', { u3: {name: 'mario'}, $d:true });
+
+                assert("Received child_added", adds, is.array.withLength(1));
+                assert("Received value", vals, is.array.withLength(1));
+                assert("Received right value", vals[0].child('u3').val(), is.object.matching({name:'mario'}));
+
+                adds = []; vals = [];
+
+                ref.on('child_added', (data,prek) => {adds.push(data)});
+                ref.on('value', (data,prek) => {vals.push(data)});
+
+                assert("Received child_added on new subscription", adds, is.array.withLength(1));
+                assert("Received value on new subscription", vals, is.array.withLength(1));
+            });
+        });
+
         describe('Sorting >', ()=>{
             it('Should notify query child_added sorted on first set', ()=>{
                 var ref = root.getUrl('/list');
@@ -605,6 +680,44 @@ describe('RDb3Client >', () => {
             assert('Value set after delete', valds, is.object);
             assert('Value correct after delete', valds.exists(), false);
        });
+    });
+
+    describe('Operating on root >', ()=>{
+        beforeEach(function () {
+            root = <any>new Client.RDb3Root(null, 'http://ciao/');
+        });
+        it('Should write and erase on root', ()=>{
+            var tr = root.getUrl('/');
+            var list = tr.child('list');
+
+            var listval :Client.RDb3Snap;
+            var trval :Client.RDb3Snap;
+
+            var listcb = list.on('value', (ds)=>{listval = ds});
+            var trcb = tr.on('value', (ds)=>{trval = ds});
+
+            var val = {list:{a:1,b:2},other:{c:3,d:4}}; 
+
+            tr.set(val);
+
+            assert("Root value set", trval.val(), is.object.matching(val));
+            assert("List value set", listval.val(), is.object.matching(val.list));
+
+
+            tr.set(null);
+
+            assert("Root value unset", trval.val(), null);
+            // TODO this is about propagating nullification to children
+            //assert("List value unset", listval.val(), null);
+
+            tr.off('value', trcb);
+            trval = null;
+
+            tr.set({a:1});
+
+            assert("Root value unchanged", trval, null);
+
+        });
     });
 
     describe('E2E >', ()=>{

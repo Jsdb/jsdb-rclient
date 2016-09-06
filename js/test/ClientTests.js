@@ -1,4 +1,6 @@
 "use strict";
+var Debug = require('debug');
+Debug.enable('tsdb:*');
 var Client = require('../main/Client');
 var SocketIO = require('socket.io');
 var SocketIOClient = require('socket.io-client');
@@ -169,6 +171,25 @@ describe('RDb3Client >', function () {
                 root.handleChange('/node/data', 'ciao2');
                 tsmatchers_1.assert("Should not receive another event", snap, tsmatchers_1.is.falsey);
             });
+            it('Should off the right event', function () {
+                var ref = root.getUrl('/node');
+                var evts = [];
+                var fn_value = ref.on('value', function (data) { return evts.push('v'); });
+                var fn_child_added = ref.on('child_added', function (data) { return evts.push('ca'); });
+                var fn_child_removed = ref.on('child_removed', function (data) { return evts.push('cr'); });
+                root.handleChange('/node', { a: 1 });
+                root.handleChange('/node', { c: 3 });
+                tsmatchers_1.assert("Right events in right order", evts, tsmatchers_1.is.array.equals(['ca', 'v', 'ca', 'cr', 'v']));
+                ref.off('value', fn_value);
+                evts = [];
+                root.handleChange('/node', { d: 5 });
+                tsmatchers_1.assert("Right events in right order", evts, tsmatchers_1.is.array.equals(['ca', 'cr']));
+                ref.off('child_added', fn_child_added);
+                ref.off('child_removed', fn_child_removed);
+                evts = [];
+                root.handleChange('/node', { e: 5 });
+                tsmatchers_1.assert("No more events", evts, tsmatchers_1.is.array.withLength(0));
+            });
             it('Should send a value event for already existing data', function () {
                 root.handleChange('/node/data', 'ciao');
                 var ref = root.getUrl('/node/data');
@@ -215,6 +236,14 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
                 tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: 'ciao' }));
+            });
+            it('Should send a value event for confirmed null', function () {
+                var ref = root.getUrl('/node');
+                var snap;
+                ref.on('value', function (data) { return snap = data; });
+                root.handleChange('/node', null);
+                tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Snapshot is non existing", snap.exists(), false);
             });
         });
         describe('Child diff events >', function () {
@@ -387,6 +416,30 @@ describe('RDb3Client >', function () {
                 }
             });
         });
+        describe('Filters >', function () {
+            it('Should return only "valued" entries', function () {
+                var ref = root.getUrl('/users');
+                root.handleChange('/users', { u1: { name: 'sara' }, u2: { name: 'simone' } });
+                ref = ref.orderByChild('name').equalTo('mario');
+                ref.getSubscription().id = '1a';
+                var adds = [];
+                var vals = [];
+                ref.on('child_added', function (data, prek) { adds.push(data); });
+                ref.on('value', function (data, prek) { vals.push(data); });
+                tsmatchers_1.assert("Should have sent no values", vals, tsmatchers_1.is.array.withLength(0));
+                tsmatchers_1.assert("Should have sent no added", adds, tsmatchers_1.is.array.withLength(0));
+                root.handleQueryChange('1a', '/list', { u3: { name: 'mario' }, $d: true });
+                tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(1));
+                tsmatchers_1.assert("Received value", vals, tsmatchers_1.is.array.withLength(1));
+                tsmatchers_1.assert("Received right value", vals[0].child('u3').val(), tsmatchers_1.is.object.matching({ name: 'mario' }));
+                adds = [];
+                vals = [];
+                ref.on('child_added', function (data, prek) { adds.push(data); });
+                ref.on('value', function (data, prek) { vals.push(data); });
+                tsmatchers_1.assert("Received child_added on new subscription", adds, tsmatchers_1.is.array.withLength(1));
+                tsmatchers_1.assert("Received value on new subscription", vals, tsmatchers_1.is.array.withLength(1));
+            });
+        });
         describe('Sorting >', function () {
             it('Should notify query child_added sorted on first set', function () {
                 var ref = root.getUrl('/list');
@@ -473,6 +526,31 @@ describe('RDb3Client >', function () {
             ref.remove();
             tsmatchers_1.assert('Value set after delete', valds, tsmatchers_1.is.object);
             tsmatchers_1.assert('Value correct after delete', valds.exists(), false);
+        });
+    });
+    describe('Operating on root >', function () {
+        beforeEach(function () {
+            root = new Client.RDb3Root(null, 'http://ciao/');
+        });
+        it('Should write and erase on root', function () {
+            var tr = root.getUrl('/');
+            var list = tr.child('list');
+            var listval;
+            var trval;
+            var listcb = list.on('value', function (ds) { listval = ds; });
+            var trcb = tr.on('value', function (ds) { trval = ds; });
+            var val = { list: { a: 1, b: 2 }, other: { c: 3, d: 4 } };
+            tr.set(val);
+            tsmatchers_1.assert("Root value set", trval.val(), tsmatchers_1.is.object.matching(val));
+            tsmatchers_1.assert("List value set", listval.val(), tsmatchers_1.is.object.matching(val.list));
+            tr.set(null);
+            tsmatchers_1.assert("Root value unset", trval.val(), null);
+            // TODO this is about propagating nullification to children
+            //assert("List value unset", listval.val(), null);
+            tr.off('value', trcb);
+            trval = null;
+            tr.set({ a: 1 });
+            tsmatchers_1.assert("Root value unchanged", trval, null);
         });
     });
     describe('E2E >', function () {

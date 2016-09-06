@@ -3,20 +3,47 @@
  * TSDB remote client VERSION_TAG 
  */
 
-import {Spi} from 'jsdb';
+import {Spi,Api} from 'jsdb';
 
 type BroadcastCb = (sub :Subscription, acpath :string, acval:any)=>void;
 
 export interface Socket {
+    id :string;
     on(event :string, cb :(...args :any[])=>any) :any;
     emit(event :string, ...args :any[]) :any;
 }
 
 export var VERSION = 'VERSION_TAG';
 
+var noOpDbg = (...any :any[])=>{}; 
+var dbgRoot = noOpDbg, dbgIo = noOpDbg, dbgTree = noOpDbg, dbgEvt = noOpDbg;
+var Debug :any = null;
+if (typeof(window) != 'undefined' && typeof((<any>window)['debug']) == 'function') {
+    Debug = (<any>window)['debug'];
+} else if (typeof(require) !== 'undefined') {
+    try {
+        var Debug = require('debug');
+    } catch (e) {
+    }
+}
+if (Debug) {
+    dbgRoot = Debug('tsdb:rclient:root');
+    dbgIo = Debug('tsdb:rclient:io');
+    dbgTree = Debug('tsdb:rclient:tree');
+    dbgEvt = Debug('tsdb:rclient:events');
+}
+
+export interface RDb3Conf extends Api.DatabaseConf {
+    baseUrl? :string,
+    socket? :Socket 
+}
+
+var prog = 0;
+
 export class RDb3Root implements Spi.DbTreeRoot {
 
     constructor(private sock :Socket, private baseUrl :string) {
+        dbgRoot('Building root %s for socket %s', baseUrl, sock?sock.id:'NONE');
         if (sock) {
             sock.on('v', (msg:any)=>this.receivedValue(msg));
             sock.on('qd', (msg:any)=>this.receivedQueryDone(msg));
@@ -31,14 +58,14 @@ export class RDb3Root implements Spi.DbTreeRoot {
     private doneProm :Promise<any> = null;
 
     getUrl(url: string): RDb3Tree {
-        return new RDb3Tree(this, this.makeRelative(url));
+        return new RDb3Tree(this, Utils.normalizePath(this.makeRelative(url)));
     }
     makeRelative(url: string): string {
         if (url.indexOf(this.baseUrl) != 0) return url;
         return "/" + url.substr(this.baseUrl.length);
     }
     makeAbsolute(url: string): string {
-        return this.baseUrl + this.makeRelative(url);
+        return (this.baseUrl || '') + this.makeRelative(url);
     }
 
     isReady(): boolean {
@@ -48,19 +75,26 @@ export class RDb3Root implements Spi.DbTreeRoot {
     whenReady(): Promise<any> {
         if (this.doneProm) return this.doneProm;
         if (this.sock) {
-            return new Promise((res,err)=>{
-                var to = setTimeout(()=>err(new Error('Timeout')), 30000);
+            dbgRoot('Asked when ready, creating promise');
+            this.doneProm = new Promise((res,err)=>{
+                var to = setTimeout(()=>{
+                    dbgRoot('Message "aa" on the socket timedout after 30s');
+                    err(new Error('Timeout'));
+                }, 30000);
                 this.sock.on('aa', ()=>{
                     clearTimeout(to);
+                    dbgRoot('Got "aa" message, root is now ready');
                     res();
                 });
             });
+            return this.doneProm;
         } else {
             return Promise.resolve();
         }
     }
 
     receivedValue(msg :any) {
+        dbgIo('Received Value %o', msg);
         this.handleChange(msg.p, msg.v);
         if (msg.q) {
             var val = msg.v;
@@ -70,18 +104,25 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     receivedQueryDone(msg :any) {
+        dbgIo('Received QueryDone %o', msg);
         var qdef = this.queries[msg.q];
-        this.handleQueryChange(msg.q, qdef.path, {$i:true});
+        if (!qdef) return;
+        this.handleQueryChange(msg.q, qdef.path, {$i:true,$d:true});
     }
 
     receivedQueryExit(msg :any) {
+        dbgIo('Received QueryExit %o', msg);
         var qdef = this.queries[msg.q];
+        if (!qdef) return;
         this.handleQueryChange(msg.q, msg.p, null);
     }
 
     send(...args :any[]) {
         if (this.sock) {
+            dbgIo('Sending %o', args);
             this.sock.emit.apply(this.sock, args);
+        } else {
+            dbgIo('NOT SENDING %o', args);
         }
     }
 
@@ -94,7 +135,27 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     sendSubscribeQuery(def :QuerySubscription) {
-        this.send('sq', def);
+        var sdef :any = {
+            id: def.id,
+            path: def.path
+        }
+        if (def.compareField) {
+            sdef.compareField = def.compareField;
+        }
+        if (typeof(def.equals) !== 'undefined') {
+            sdef.equals = def.equals;
+        }
+        if (typeof(def.from) !== 'undefined') {
+            sdef.from = def.from;
+        }
+        if (typeof(def.to) !== 'undefined') {
+            sdef.to = def.to;
+        }
+        if (def.limit) {
+            sdef.limit = def.limit;
+            sdef.limitLast = def.limitLast;
+        }
+        this.send('sq', sdef);
     }
 
     sendUnsubscribeQuery(id :string) {
@@ -114,10 +175,31 @@ export class RDb3Root implements Spi.DbTreeRoot {
     unsubscribe(path :string) {
         this.sendUnsubscribe(path);
         delete this.subscriptions[path];
-        var ch = findChain(Utils.parentPath(path), this.data);
-        var leaf = Utils.leafPath(path);
-        var lst = ch.pop();
-        delete lst[leaf];
+        // TODO what is below is suboptimal
+        /*
+        Should not remove data, chldren of the path being unsubscribed, if they have their own listener.
+        For example :
+          sub : /list 
+          val : /list = {a:1,b:2,c:3}
+          sub : /list/a
+          uns : /list ---> should remove /list/b and /list/c but not list/a since it has a listener there
+
+        And :
+          sub : /list 
+          val : /list = {a:1,b:2,c:3}
+          sub : /list/a
+          uns : /list/a ---> should not remove anything, cause /list/a is being listened by /list 
+          uns : /list -> now it can delete everything
+        */ 
+        if (path == '') {
+            // Special case for root
+            this.data = {};
+        } else {
+            var ch = findChain(Utils.parentPath(path), this.data);
+            var leaf = Utils.leafPath(path);
+            var lst = ch.pop();
+            delete lst[leaf];
+        }
     }
 
     subscribeQuery(query :QuerySubscription) {
@@ -155,7 +237,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     handleQueryChange(id :string, path :string, val :any) {
         var def = this.queries[id];
         if (!def) {
-            // TODO stale query, unsubscribe?
+            // TODO stale query, send unsubscribe again?
             return;
         }
         var subp = path.substr(def.path.length);
@@ -257,6 +339,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
             }
             return changed;
         } else {
+            if (!parentval || !leaf) {
+                this.broadcastValue(path, newval, queryPath);
+                return true;
+            }
             if (parentval[leaf] != newval) {
                 if (newval === null) {
                     delete parentval[leaf];
@@ -267,6 +353,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 }
                 this.broadcastValue(path, newval, queryPath);
                 return true;
+            } else if (newval === null) {
+                // TODO we should keep somehow a list of "known missings", to avoid broadcasting this event over and over if it happens
+                // Always broadcast values null
+                this.broadcastValue(path, newval, queryPath);
             }
             return false;
         }
@@ -298,12 +388,22 @@ export class RDb3Root implements Spi.DbTreeRoot {
         var handlers = sub.findByType(type);
         if (handlers.length == 0) return;
         var snap = snapProvider();
+        dbgEvt('Send event %s %s:%o to %s handlers', path, type, <any>snap['data'], handlers.length);
         for (var i = 0; i < handlers.length; i++) {
+            dbgEvt('%s sent event %s %s', handlers[i]._intid, path, type);
             handlers[i].callback(snap, prevChildName);
         }
     }
 
-    static create(conf :any) {
+    static create(conf :RDb3Conf) {
+        if (!conf.socket) {
+            if (!conf.baseUrl) throw Error("Configure RClient with either 'socket' or 'baseUrl'");
+            if (typeof(io) === 'function') {
+                conf.socket = io(conf.baseUrl); 
+            } else {
+                throw new Error("Cannot find Socket.IO to start a connection to " + conf.baseUrl);
+            }
+        }
         return new RDb3Root(conf.socket, conf.baseUrl);
     }
 
@@ -329,20 +429,24 @@ export class Subscription {
     cbs: Handler[] = [];
 
     add(cb: Handler) {
+        dbgEvt("Adding handler %s from %s", cb._intid, this.path);
         if (this.cbs.length == 0) this.subscribe();
         this.cbs.push(cb);
     }
 
     remove(cb: Handler) {
         this.cbs = this.cbs.filter((ocb) => ocb !== cb);
+        dbgEvt("Removed handler %s from %s", cb._intid, this.path);
         if (this.cbs.length == 0) this.unsubscribe();
     }
 
     subscribe() {
+        dbgEvt("Subscribing to %s", this.path);
         this.root.sendSubscribe(this.path);
     }
 
     unsubscribe() {
+        dbgEvt("Unsubscribing to %s", this.path);
         this.root.unsubscribe(this.path);
     }
 
@@ -350,9 +454,14 @@ export class Subscription {
         return this.cbs.filter((ocb)=>ocb.eventType==evtype);
     }
 
+    getCurrentValue() {
+        return this.root.getValue(this.path);
+    }
+
 }
 
 export abstract class Handler {
+    public _intid = 'h' + (prog++);
     public eventType: string;
 
     constructor(
@@ -361,7 +470,6 @@ export abstract class Handler {
         public tree: RDb3Tree
     ) {
         this.hook();
-        this.init();
     }
 
     matches(eventType?: string, callback?: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, context?: Object) {
@@ -383,7 +491,7 @@ export abstract class Handler {
     }
 
     protected getValue() :any {
-        return this.tree.root.getValue(this.tree.url);
+        return this.tree.getSubscription().getCurrentValue();
     }
 
     abstract init() :void;
@@ -394,7 +502,8 @@ class ValueCbHandler extends Handler {
         this.eventType = 'value';
         var acval = this.getValue();
         if (acval !== null && typeof(acval) !== 'undefined') {
-            this.callback(new RDb3Snap(this.getValue(), this.tree.root, this.tree.url));
+            dbgEvt('%s Send initial event %s value:%o', this._intid, this.tree.url, acval);
+            this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url));
         }
     }
 }
@@ -403,9 +512,10 @@ class ChildAddedCbHandler extends Handler {
     init() {
         this.eventType = 'child_added';
         var acv = this.getValue();
-        var mysnap = new RDb3Snap(this.getValue(), this.tree.root, this.tree.url);
+        var mysnap = new RDb3Snap(acv, this.tree.root, this.tree.url);
         var prek :string = null;
         mysnap.forEach((cs)=>{
+            dbgEvt('%s Send initial event %s child_added:%o', this._intid, <any>cs['url'], <any>cs['data']);
             this.callback(cs,prek);
             prek = cs.key();
             return false;
@@ -604,7 +714,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         public root: RDb3Root,
         public url: string
     ) {
-
+        dbgTree('Created ' + url);
     }
 
     private cbs: Handler[] = [];
@@ -616,20 +726,27 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
 
     on(eventType: string, callback: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, cancelCallback?: (error: any) => void, context?: Object): (dataSnapshot: RDb3Snap, prevChildName?: string) => void {
         var ctor: CbHandlerCtor = (<any>cbHandlers)[eventType];
-        if (!ctor) throw new Error("Cannot find event " + eventType);
+        if (!ctor) {
+            dbgTree("Cannot find event %s while trying to hook on %s", eventType, this.url);
+            throw new Error("Cannot find event " + eventType);
+        }
+        dbgTree('Hooking %s to %s, before it has %s hooks', eventType, this.url, this.cbs.length);
         var handler = new ctor(callback, context, this);
         this.cbs.push(handler);
+        // It's very important to init after hooking, since init causes sync event, that could cause an unhook, 
+        // the unhook would be not possible/not effective if the handler is not found in the cbs list.
+        handler.init();
         return callback;
     }
 
     off(eventType?: string, callback?: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, context?: Object): void {
+        var prelen = this.cbs.length;
         this.cbs = this.cbs.filter((ach) => {
-            if (ach.matches(eventType, callback, context)) {
-                ach.decommission();
-                return true;
-            }
+            if (!ach.matches(eventType, callback, context)) return true;
+            ach.decommission();
             return false;
         });
+        dbgTree('Unhooked %s from %s, before it had %s, now has %s hooks', eventType, this.url, prelen, this.cbs.length);
     }
 
 
@@ -776,8 +893,8 @@ export class QuerySubscription extends Subscription {
     id: string = (progQId++)+'a';
 
     compareField: string = null;
-    from: string | number = null;
-    to: string | number = null;
+    from: string | number;
+    to: string | number;
     equals: string | number;
     limit: number = null;
     limitLast = false;
@@ -804,11 +921,15 @@ export class QuerySubscription extends Subscription {
 
     subscribe() {
         this.root.subscribeQuery(this);
-        // TODO subscribe to this query
+        this.root.sendSubscribeQuery(this);
     }
 
     unsubscribe() {
-        // TODO unsubscribe this query if handlers are zero
+        this.root.unsubscribeQuery(this.id);
+    }
+
+    getCurrentValue() {
+        return this.root.getValue('/q' + this.id);
     }
 
     makeSorter() {

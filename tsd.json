@@ -22,6 +22,9 @@
     },
     "core-js/core-js.d.ts": {
       "commit": "084e55916674ff7128722bf72150aa55acea08d9"
+    },
+    "debug/debug.d.ts": {
+      "commit": "084e55916674ff7128722bf72150aa55acea08d9"
     }
   }
 }

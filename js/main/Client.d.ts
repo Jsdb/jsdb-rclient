@@ -1,12 +1,17 @@
 /**
- * TSDB remote client 20160903_174659_master_1.0.0_50f659a
+ * TSDB remote client 20160906_162314_master_1.0.0_972c69a
  */
-import { Spi } from 'jsdb';
+import { Spi, Api } from 'jsdb';
 export interface Socket {
+    id: string;
     on(event: string, cb: (...args: any[]) => any): any;
     emit(event: string, ...args: any[]): any;
 }
 export declare var VERSION: string;
+export interface RDb3Conf extends Api.DatabaseConf {
+    baseUrl?: string;
+    socket?: Socket;
+}
 export declare class RDb3Root implements Spi.DbTreeRoot {
     private sock;
     private baseUrl;
@@ -42,7 +47,7 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     broadcastChildMoved(path: string, child: string, val: any, queryPath: string, prevChildName?: string): void;
     broadcastChildRemoved(path: string, child: string, val: any, queryPath: string): void;
     broadcast(path: string, type: string, snapProvider: () => RDb3Snap, prevChildName?: string): void;
-    static create(conf: any): RDb3Root;
+    static create(conf: RDb3Conf): RDb3Root;
 }
 export declare class Subscription {
     root: RDb3Root;
@@ -54,11 +59,13 @@ export declare class Subscription {
     subscribe(): void;
     unsubscribe(): void;
     findByType(evtype: string): Handler[];
+    getCurrentValue(): any;
 }
 export declare abstract class Handler {
     callback: (dataSnapshot: RDb3Snap, prevChildName?: string) => void;
     context: Object;
     tree: RDb3Tree;
+    _intid: string;
     eventType: string;
     constructor(callback: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, context: Object, tree: RDb3Tree);
     matches(eventType?: string, callback?: (dataSnapshot: RDb3Snap, prevChildName?: string) => void, context?: Object): boolean;
@@ -151,5 +158,6 @@ export declare class QuerySubscription extends Subscription {
     remove(cb: Handler): void;
     subscribe(): void;
     unsubscribe(): void;
+    getCurrentValue(): any;
     makeSorter(): (a: any, b: any) => number;
 }

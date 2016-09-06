@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160903_174659_master_1.0.0_50f659a
+ * TSDB remote client 20160906_162314_master_1.0.0_972c69a
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -11,11 +11,36 @@ var __extends = (this && this.__extends) || function (d, b) {
         var v = factory(require, exports); if (v !== undefined) module.exports = v;
     }
         else if (typeof define === 'function' && define.amd) {
-        define(["require", "exports"], factory);    } else {        var glb = typeof window !== 'undefined' ? window : global;        glb['TsdbRClient'] = factory(null, {});    }
+        define(["require", "exports"], factory);    } else {        var glb = typeof window !== 'undefined' ? window : global;        var exp = {};        glb['TsdbRClient'] = exp;        factory(null, exp);    }
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160903_174659_master_1.0.0_50f659a';
+    exports.VERSION = '20160906_162314_master_1.0.0_972c69a';
+    var noOpDbg = function () {
+        var any = [];
+        for (var _i = 0; _i < arguments.length; _i++) {
+            any[_i - 0] = arguments[_i];
+        }
+    };
+    var dbgRoot = noOpDbg, dbgIo = noOpDbg, dbgTree = noOpDbg, dbgEvt = noOpDbg;
+    var Debug = null;
+    if (typeof (window) != 'undefined' && typeof (window['debug']) == 'function') {
+        Debug = window['debug'];
+    }
+    else if (typeof (require) !== 'undefined') {
+        try {
+            var Debug = require('debug');
+        }
+        catch (e) {
+        }
+    }
+    if (Debug) {
+        dbgRoot = Debug('tsdb:rclient:root');
+        dbgIo = Debug('tsdb:rclient:io');
+        dbgTree = Debug('tsdb:rclient:tree');
+        dbgEvt = Debug('tsdb:rclient:events');
+    }
+    var prog = 0;
     var RDb3Root = (function () {
         function RDb3Root(sock, baseUrl) {
             var _this = this;
@@ -25,6 +50,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.data = {};
             this.queries = {};
             this.doneProm = null;
+            dbgRoot('Building root %s for socket %s', baseUrl, sock ? sock.id : 'NONE');
             if (sock) {
                 sock.on('v', function (msg) { return _this.receivedValue(msg); });
                 sock.on('qd', function (msg) { return _this.receivedQueryDone(msg); });
@@ -32,7 +58,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
         }
         RDb3Root.prototype.getUrl = function (url) {
-            return new RDb3Tree(this, this.makeRelative(url));
+            return new RDb3Tree(this, Utils.normalizePath(this.makeRelative(url)));
         };
         RDb3Root.prototype.makeRelative = function (url) {
             if (url.indexOf(this.baseUrl) != 0)
@@ -40,7 +66,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             return "/" + url.substr(this.baseUrl.length);
         };
         RDb3Root.prototype.makeAbsolute = function (url) {
-            return this.baseUrl + this.makeRelative(url);
+            return (this.baseUrl || '') + this.makeRelative(url);
         };
         RDb3Root.prototype.isReady = function () {
             return true;
@@ -50,19 +76,26 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (this.doneProm)
                 return this.doneProm;
             if (this.sock) {
-                return new Promise(function (res, err) {
-                    var to = setTimeout(function () { return err(new Error('Timeout')); }, 30000);
+                dbgRoot('Asked when ready, creating promise');
+                this.doneProm = new Promise(function (res, err) {
+                    var to = setTimeout(function () {
+                        dbgRoot('Message "aa" on the socket timedout after 30s');
+                        err(new Error('Timeout'));
+                    }, 30000);
                     _this.sock.on('aa', function () {
                         clearTimeout(to);
+                        dbgRoot('Got "aa" message, root is now ready');
                         res();
                     });
                 });
+                return this.doneProm;
             }
             else {
                 return Promise.resolve();
             }
         };
         RDb3Root.prototype.receivedValue = function (msg) {
+            dbgIo('Received Value %o', msg);
             this.handleChange(msg.p, msg.v);
             if (msg.q) {
                 var val = msg.v;
@@ -71,11 +104,17 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
         };
         RDb3Root.prototype.receivedQueryDone = function (msg) {
+            dbgIo('Received QueryDone %o', msg);
             var qdef = this.queries[msg.q];
-            this.handleQueryChange(msg.q, qdef.path, { $i: true });
+            if (!qdef)
+                return;
+            this.handleQueryChange(msg.q, qdef.path, { $i: true, $d: true });
         };
         RDb3Root.prototype.receivedQueryExit = function (msg) {
+            dbgIo('Received QueryExit %o', msg);
             var qdef = this.queries[msg.q];
+            if (!qdef)
+                return;
             this.handleQueryChange(msg.q, msg.p, null);
         };
         RDb3Root.prototype.send = function () {
@@ -84,7 +123,11 @@ var __extends = (this && this.__extends) || function (d, b) {
                 args[_i - 0] = arguments[_i];
             }
             if (this.sock) {
+                dbgIo('Sending %o', args);
                 this.sock.emit.apply(this.sock, args);
+            }
+            else {
+                dbgIo('NOT SENDING %o', args);
             }
         };
         RDb3Root.prototype.sendSubscribe = function (path) {
@@ -94,7 +137,27 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.send('up', path);
         };
         RDb3Root.prototype.sendSubscribeQuery = function (def) {
-            this.send('sq', def);
+            var sdef = {
+                id: def.id,
+                path: def.path
+            };
+            if (def.compareField) {
+                sdef.compareField = def.compareField;
+            }
+            if (typeof (def.equals) !== 'undefined') {
+                sdef.equals = def.equals;
+            }
+            if (typeof (def.from) !== 'undefined') {
+                sdef.from = def.from;
+            }
+            if (typeof (def.to) !== 'undefined') {
+                sdef.to = def.to;
+            }
+            if (def.limit) {
+                sdef.limit = def.limit;
+                sdef.limitLast = def.limitLast;
+            }
+            this.send('sq', sdef);
         };
         RDb3Root.prototype.sendUnsubscribeQuery = function (id) {
             this.send('uq', id);
@@ -110,10 +173,32 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Root.prototype.unsubscribe = function (path) {
             this.sendUnsubscribe(path);
             delete this.subscriptions[path];
-            var ch = findChain(Utils.parentPath(path), this.data);
-            var leaf = Utils.leafPath(path);
-            var lst = ch.pop();
-            delete lst[leaf];
+            // TODO what is below is suboptimal
+            /*
+            Should not remove data, chldren of the path being unsubscribed, if they have their own listener.
+            For example :
+              sub : /list
+              val : /list = {a:1,b:2,c:3}
+              sub : /list/a
+              uns : /list ---> should remove /list/b and /list/c but not list/a since it has a listener there
+    
+            And :
+              sub : /list
+              val : /list = {a:1,b:2,c:3}
+              sub : /list/a
+              uns : /list/a ---> should not remove anything, cause /list/a is being listened by /list
+              uns : /list -> now it can delete everything
+            */
+            if (path == '') {
+                // Special case for root
+                this.data = {};
+            }
+            else {
+                var ch = findChain(Utils.parentPath(path), this.data);
+                var leaf = Utils.leafPath(path);
+                var lst = ch.pop();
+                delete lst[leaf];
+            }
         };
         RDb3Root.prototype.subscribeQuery = function (query) {
             this.queries[query.id] = query;
@@ -145,7 +230,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Root.prototype.handleQueryChange = function (id, path, val) {
             var def = this.queries[id];
             if (!def) {
-                // TODO stale query, unsubscribe?
+                // TODO stale query, send unsubscribe again?
                 return;
             }
             var subp = path.substr(def.path.length);
@@ -247,6 +332,10 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return changed;
             }
             else {
+                if (!parentval || !leaf) {
+                    this.broadcastValue(path, newval, queryPath);
+                    return true;
+                }
                 if (parentval[leaf] != newval) {
                     if (newval === null) {
                         delete parentval[leaf];
@@ -256,6 +345,11 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                     this.broadcastValue(path, newval, queryPath);
                     return true;
+                }
+                else if (newval === null) {
+                    // TODO we should keep somehow a list of "known missings", to avoid broadcasting this event over and over if it happens
+                    // Always broadcast values null
+                    this.broadcastValue(path, newval, queryPath);
                 }
                 return false;
             }
@@ -288,11 +382,23 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (handlers.length == 0)
                 return;
             var snap = snapProvider();
+            dbgEvt('Send event %s %s:%o to %s handlers', path, type, snap['data'], handlers.length);
             for (var i = 0; i < handlers.length; i++) {
+                dbgEvt('%s sent event %s %s', handlers[i]._intid, path, type);
                 handlers[i].callback(snap, prevChildName);
             }
         };
         RDb3Root.create = function (conf) {
+            if (!conf.socket) {
+                if (!conf.baseUrl)
+                    throw Error("Configure RClient with either 'socket' or 'baseUrl'");
+                if (typeof (io) === 'function') {
+                    conf.socket = io(conf.baseUrl);
+                }
+                else {
+                    throw new Error("Cannot find Socket.IO to start a connection to " + conf.baseUrl);
+                }
+            }
             return new RDb3Root(conf.socket, conf.baseUrl);
         };
         return RDb3Root;
@@ -313,23 +419,30 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.cbs = [];
         }
         Subscription.prototype.add = function (cb) {
+            dbgEvt("Adding handler %s from %s", cb._intid, this.path);
             if (this.cbs.length == 0)
                 this.subscribe();
             this.cbs.push(cb);
         };
         Subscription.prototype.remove = function (cb) {
             this.cbs = this.cbs.filter(function (ocb) { return ocb !== cb; });
+            dbgEvt("Removed handler %s from %s", cb._intid, this.path);
             if (this.cbs.length == 0)
                 this.unsubscribe();
         };
         Subscription.prototype.subscribe = function () {
+            dbgEvt("Subscribing to %s", this.path);
             this.root.sendSubscribe(this.path);
         };
         Subscription.prototype.unsubscribe = function () {
+            dbgEvt("Unsubscribing to %s", this.path);
             this.root.unsubscribe(this.path);
         };
         Subscription.prototype.findByType = function (evtype) {
             return this.cbs.filter(function (ocb) { return ocb.eventType == evtype; });
+        };
+        Subscription.prototype.getCurrentValue = function () {
+            return this.root.getValue(this.path);
         };
         return Subscription;
     }());
@@ -339,8 +452,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.callback = callback;
             this.context = context;
             this.tree = tree;
+            this._intid = 'h' + (prog++);
             this.hook();
-            this.init();
         }
         Handler.prototype.matches = function (eventType, callback, context) {
             if (context) {
@@ -360,7 +473,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.tree.getSubscription().remove(this);
         };
         Handler.prototype.getValue = function () {
-            return this.tree.root.getValue(this.tree.url);
+            return this.tree.getSubscription().getCurrentValue();
         };
         return Handler;
     }());
@@ -374,7 +487,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.eventType = 'value';
             var acval = this.getValue();
             if (acval !== null && typeof (acval) !== 'undefined') {
-                this.callback(new RDb3Snap(this.getValue(), this.tree.root, this.tree.url));
+                dbgEvt('%s Send initial event %s value:%o', this._intid, this.tree.url, acval);
+                this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url));
             }
         };
         return ValueCbHandler;
@@ -388,9 +502,10 @@ var __extends = (this && this.__extends) || function (d, b) {
             var _this = this;
             this.eventType = 'child_added';
             var acv = this.getValue();
-            var mysnap = new RDb3Snap(this.getValue(), this.tree.root, this.tree.url);
+            var mysnap = new RDb3Snap(acv, this.tree.root, this.tree.url);
             var prek = null;
             mysnap.forEach(function (cs) {
+                dbgEvt('%s Send initial event %s child_added:%o', _this._intid, cs['url'], cs['data']);
                 _this.callback(cs, prek);
                 prek = cs.key();
                 return false;
@@ -588,26 +703,34 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.url = url;
             this.cbs = [];
             this.qsub = null;
+            dbgTree('Created ' + url);
         }
         RDb3Tree.prototype.getSubscription = function () {
             return this.qsub || this.root.subscribe(this.url);
         };
         RDb3Tree.prototype.on = function (eventType, callback, cancelCallback, context) {
             var ctor = cbHandlers[eventType];
-            if (!ctor)
+            if (!ctor) {
+                dbgTree("Cannot find event %s while trying to hook on %s", eventType, this.url);
                 throw new Error("Cannot find event " + eventType);
+            }
+            dbgTree('Hooking %s to %s, before it has %s hooks', eventType, this.url, this.cbs.length);
             var handler = new ctor(callback, context, this);
             this.cbs.push(handler);
+            // It's very important to init after hooking, since init causes sync event, that could cause an unhook, 
+            // the unhook would be not possible/not effective if the handler is not found in the cbs list.
+            handler.init();
             return callback;
         };
         RDb3Tree.prototype.off = function (eventType, callback, context) {
+            var prelen = this.cbs.length;
             this.cbs = this.cbs.filter(function (ach) {
-                if (ach.matches(eventType, callback, context)) {
-                    ach.decommission();
+                if (!ach.matches(eventType, callback, context))
                     return true;
-                }
+                ach.decommission();
                 return false;
             });
+            dbgTree('Unhooked %s from %s, before it had %s, now has %s hooks', eventType, this.url, prelen, this.cbs.length);
         };
         RDb3Tree.prototype.once = function (eventType, successCallback, failureCallback, context) {
             var _this = this;
@@ -744,8 +867,6 @@ var __extends = (this && this.__extends) || function (d, b) {
             _super.call(this, oth.root, oth.path);
             this.id = (progQId++) + 'a';
             this.compareField = null;
-            this.from = null;
-            this.to = null;
             this.limit = null;
             this.limitLast = false;
             if (oth instanceof QuerySubscription) {
@@ -765,10 +886,13 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         QuerySubscription.prototype.subscribe = function () {
             this.root.subscribeQuery(this);
-            // TODO subscribe to this query
+            this.root.sendSubscribeQuery(this);
         };
         QuerySubscription.prototype.unsubscribe = function () {
-            // TODO unsubscribe this query if handlers are zero
+            this.root.unsubscribeQuery(this.id);
+        };
+        QuerySubscription.prototype.getCurrentValue = function () {
+            return this.root.getValue('/q' + this.id);
         };
         QuerySubscription.prototype.makeSorter = function () {
             var _this = this;
