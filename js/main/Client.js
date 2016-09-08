@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160906_162314_master_1.0.0_972c69a
+ * TSDB remote client 20160908_135515_master_1.0.0_4cd8117
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,7 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160906_162314_master_1.0.0_972c69a';
+    exports.VERSION = '20160908_135515_master_1.0.0_4cd8117';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -47,10 +47,11 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.sock = sock;
             this.baseUrl = baseUrl;
             this.subscriptions = {};
-            this.data = {};
             this.queries = {};
             this.doneProm = null;
             dbgRoot('Building root %s for socket %s', baseUrl, sock ? sock.id : 'NONE');
+            this.data = {};
+            markIncomplete(this.data);
             if (sock) {
                 sock.on('v', function (msg) { return _this.receivedValue(msg); });
                 sock.on('qd', function (msg) { return _this.receivedQueryDone(msg); });
@@ -95,23 +96,23 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
         };
         RDb3Root.prototype.receivedValue = function (msg) {
-            dbgIo('Received Value %o', msg);
+            dbgIo('Received Value for %s : %o', msg.p, msg);
             this.handleChange(msg.p, msg.v);
             if (msg.q) {
                 var val = msg.v;
-                val.$l = true;
                 this.handleQueryChange(msg.q, msg.p, val);
             }
         };
         RDb3Root.prototype.receivedQueryDone = function (msg) {
-            dbgIo('Received QueryDone %o', msg);
+            dbgIo('Received QueryDone for %s : %o', msg.q, msg);
             var qdef = this.queries[msg.q];
             if (!qdef)
                 return;
+            qdef.done = true;
             this.handleQueryChange(msg.q, qdef.path, { $i: true, $d: true });
         };
         RDb3Root.prototype.receivedQueryExit = function (msg) {
-            dbgIo('Received QueryExit %o', msg);
+            dbgIo('Received QueryExit for %s : %o', msg.q, msg);
             var qdef = this.queries[msg.q];
             if (!qdef)
                 return;
@@ -192,12 +193,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (path == '') {
                 // Special case for root
                 this.data = {};
+                markIncomplete(this.data);
             }
             else {
                 var ch = findChain(Utils.parentPath(path), this.data);
                 var leaf = Utils.leafPath(path);
                 var lst = ch.pop();
-                delete lst[leaf];
+                if (lst) {
+                    delete lst[leaf];
+                }
             }
         };
         RDb3Root.prototype.subscribeQuery = function (query) {
@@ -243,6 +247,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 markIncomplete(nnv);
                 nv = nnv;
             }
+            nv.$l = !def.done;
             if (!this.data['q' + id])
                 this.data['q' + id] = {};
             nv['$sorter'] = this.data['q' + id]['$sorter'] = def.makeSorter();
@@ -269,7 +274,14 @@ var __extends = (this && this.__extends) || function (d, b) {
                 if (!acval || typeof (acval) !== 'object') {
                     changed = true;
                     acval = {};
+                    if (isIncomplete(newval)) {
+                        markIncomplete(acval);
+                    }
                     parentval[leaf] = acval;
+                }
+                if (!isIncomplete(newval) && isIncomplete(acval)) {
+                    markComplete(acval);
+                    changed = true;
                 }
                 // Look children of the new value
                 var nks = getKeysOrdered(newval);
@@ -286,12 +298,18 @@ var __extends = (this && this.__extends) || function (d, b) {
                             this.broadcastChildRemoved(path, k, presnap, queryPath);
                             // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
                             //this.broadcastChildMoved(path, k, acval[k]);
+                            // If we are in a query, really remove the child, no need for KNOWN_NULL
+                            if (queryPath)
+                                delete acval[k];
                             changed = true;
                         }
                     }
                     else if (typeof (pre) === 'undefined') {
                         // Child added
                         pre = {};
+                        if (isIncomplete(newc)) {
+                            markIncomplete(pre);
+                        }
                         acval[k] = pre;
                         changed = true;
                         this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k);
@@ -326,7 +344,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                         }
                     }
                 }
-                if ((changed && !newval.$l) || newval.$d) {
+                if ((changed && !newval.$l && !isIncomplete(acval)) || newval.$d) {
                     this.broadcastValue(path, acval, queryPath);
                 }
                 return changed;
@@ -336,20 +354,33 @@ var __extends = (this && this.__extends) || function (d, b) {
                     this.broadcastValue(path, newval, queryPath);
                     return true;
                 }
-                if (parentval[leaf] != newval) {
+                if (newval === null) {
+                    if (queryPath) {
+                        // If in a query, don't use known nulls
+                        if (parentval[leaf] != null) {
+                            delete parentval[leaf];
+                            this.broadcastValue(path, null, queryPath);
+                            return true;
+                        }
+                    }
+                    else {
+                        if (parentval[leaf] != KNOWN_NULL) {
+                            // keep "known missings", to avoid broadcasting this event over and over if it happens
+                            parentval[leaf] = KNOWN_NULL;
+                            this.broadcastValue(path, KNOWN_NULL, queryPath);
+                            return true;
+                        }
+                    }
+                }
+                else if (parentval[leaf] != newval) {
                     if (newval === null) {
-                        delete parentval[leaf];
+                        parentval[leaf] = KNOWN_NULL;
                     }
                     else {
                         parentval[leaf] = newval;
                     }
                     this.broadcastValue(path, newval, queryPath);
                     return true;
-                }
-                else if (newval === null) {
-                    // TODO we should keep somehow a list of "known missings", to avoid broadcasting this event over and over if it happens
-                    // Always broadcast values null
-                    this.broadcastValue(path, newval, queryPath);
                 }
                 return false;
             }
@@ -486,7 +517,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         ValueCbHandler.prototype.init = function () {
             this.eventType = 'value';
             var acval = this.getValue();
-            if (acval !== null && typeof (acval) !== 'undefined') {
+            if (acval !== null && typeof (acval) !== 'undefined' && !isIncomplete(acval)) {
                 dbgEvt('%s Send initial event %s value:%o', this._intid, this.tree.url, acval);
                 this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url));
             }
@@ -560,7 +591,16 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.root = root;
             this.url = url;
             if (data != null && typeof (data) !== undefined && reclone) {
-                this.data = JSON.parse(JSON.stringify(data));
+                var str = JSON.stringify(data);
+                if (str === undefined || str === 'undefined') {
+                    this.data = undefined;
+                }
+                else if (str === null || str === 'null') {
+                    this.data = null;
+                }
+                else {
+                    this.data = JSON.parse(str);
+                }
                 if (data['$sorter'])
                     this.data['$sorter'] = data['$sorter'];
             }
@@ -600,6 +640,8 @@ var __extends = (this && this.__extends) || function (d, b) {
     }());
     exports.RDb3Snap = RDb3Snap;
     function getKeysOrdered(obj, fn) {
+        if (!obj)
+            return [];
         fn = fn || obj['$sorter'];
         var sortFn = null;
         if (fn) {
@@ -692,11 +734,19 @@ var __extends = (this && this.__extends) || function (d, b) {
         return ret;
     }
     function markIncomplete(obj) {
-        Object.defineProperty(obj, '$i', { enumerable: false, value: true });
+        Object.defineProperty(obj, '$i', { enumerable: false, configurable: true, value: true });
+    }
+    function markComplete(obj) {
+        delete obj.$i;
+        //Object.defineProperty(obj, '$i', {enumerable:false, value:false});
     }
     function isIncomplete(obj) {
-        return !!obj['$i'];
+        return obj && typeof (obj) === 'object' && !!obj['$i'];
     }
+    var KNOWN_NULL = {
+        toJSON: function () { return undefined; },
+        $i: false
+    };
     var RDb3Tree = (function () {
         function RDb3Tree(root, url) {
             this.root = root;
@@ -869,6 +919,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.compareField = null;
             this.limit = null;
             this.limitLast = false;
+            this.done = false;
             if (oth instanceof QuerySubscription) {
                 this.compareField = oth.compareField;
                 this.from = oth.from;

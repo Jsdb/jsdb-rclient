@@ -6,7 +6,7 @@ var SocketIO = require('socket.io');
 var SocketIOClient = require('socket.io-client');
 var tsmatchers_1 = require('tsmatchers');
 var root;
-describe('RDb3Client >', function () {
+describe.only('RDb3Client >', function () {
     describe('Local data >', function () {
         beforeEach(function () {
             root = new Client.RDb3Root(null, 'http://ciao/');
@@ -14,6 +14,7 @@ describe('RDb3Client >', function () {
         describe('Reading >', function () {
             it('Should not find root non existing data', function () {
                 tsmatchers_1.assert("Should return undefined", root.getValue('/node'), tsmatchers_1.is.undefined);
+                tsmatchers_1.assert("Should not have polluted data", root.data, tsmatchers_1.is.strictly.object.matching({}));
             });
             it('Should find root existing data', function () {
                 root.data['node'] = 'ciao';
@@ -70,7 +71,7 @@ describe('RDb3Client >', function () {
             it('Should overwrite subs', function () {
                 root.handleChange('/node/sub2', 'altro');
                 root.handleChange('/node', { sub1: 'ciao' });
-                tsmatchers_1.assert("Should return merged object", root.data['node']['sub2'], tsmatchers_1.is.undefined);
+                tsmatchers_1.assert("Should return merged object", JSON.stringify(root.data['node']['sub2']), tsmatchers_1.is.undefined);
             });
         });
     });
@@ -183,7 +184,7 @@ describe('RDb3Client >', function () {
                 ref.off('value', fn_value);
                 evts = [];
                 root.handleChange('/node', { d: 5 });
-                tsmatchers_1.assert("Right events in right order", evts, tsmatchers_1.is.array.equals(['ca', 'cr']));
+                tsmatchers_1.assert("Right events in right order after off", evts, tsmatchers_1.is.array.equals(['ca', 'cr']));
                 ref.off('child_added', fn_child_added);
                 ref.off('child_removed', fn_child_removed);
                 evts = [];
@@ -197,6 +198,18 @@ describe('RDb3Client >', function () {
                 var fn = ref.on('value', function (data) { return snap = data; });
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Recevied event data", snap.val(), 'ciao');
+            });
+            it('Should not send a value for existing but not loaded data', function () {
+                root.handleChange('/node/data/sub', 'ciao');
+                tsmatchers_1.assert("/node is incomplete", root.data['node'].$i, true);
+                tsmatchers_1.assert("/node/data is incomplete", root.data['node']['data'].$i, true);
+                var ref = root.getUrl('/node/');
+                var snap;
+                var fn = ref.on('value', function (data) { return snap = data; });
+                tsmatchers_1.assert("Not yet received event", snap, tsmatchers_1.is.falsey);
+                root.handleChange('/node', { data: { sub: 'ciao' } });
+                tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: { sub: 'ciao' } }));
             });
             it('Should send a value event with once', function () {
                 var ref = root.getUrl('/node/data');
@@ -219,30 +232,40 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Recevied event data", snap.val(), 'ciao');
             });
             it('Should send a value event for inner additions', function () {
+                root.handleChange('/node', { oth: 'pippo' });
                 var ref = root.getUrl('/node');
                 var snap;
                 ref.on('value', function (data) { return snap = data; });
+                snap = null;
                 root.handleChange('/node/data', 'ciao');
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
-                tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: 'ciao' }));
+                tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: 'ciao', oth: 'pippo' }));
             });
             it('Should send a value event for inner changes', function () {
                 var ref = root.getUrl('/node');
-                root.handleChange('/node/data', 'bau');
+                root.handleChange('/node', { 'data': 'bau' });
                 var snap;
                 ref.on('value', function (data) { return snap = data; });
+                snap = null;
                 root.handleChange('/node/data', 'ciao');
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
                 tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: 'ciao' }));
             });
-            it('Should send a value event for confirmed null', function () {
+        });
+        describe('Known missing >', function () {
+            it('Should send a value event for confirmed null, also on second call', function () {
                 var ref = root.getUrl('/node');
                 var snap;
-                ref.on('value', function (data) { return snap = data; });
+                var cb = ref.on('value', function (data) { return snap = data; });
                 root.handleChange('/node', null);
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Snapshot is non existing", snap.exists(), false);
+                snap = null;
+                ref.on('value', function (data) { return snap = data; });
+                ref.off('value', cb);
+                tsmatchers_1.assert("Received second value event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Snapshot is non existing", snap.exists(), false);
             });
         });
@@ -487,7 +510,7 @@ describe('RDb3Client >', function () {
                 root.handleQueryChange('1a', '/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } });
                 tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(3));
                 adds = [];
-                root.handleQueryChange('1a', '/list/d/val', 1);
+                root.handleQueryChange('1a', '/list/d', { val: 1 });
                 tsmatchers_1.assert("Received new child_added", adds, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Removed the last element", rems[0].key(), 'c');

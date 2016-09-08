@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160906_162314_master_1.0.0_972c69a
+ * TSDB remote client 20160908_135515_master_1.0.0_4cd8117
  */
 import { Spi, Api } from 'jsdb';
 export interface Socket {
@@ -153,6 +153,7 @@ export declare class QuerySubscription extends Subscription {
     equals: string | number;
     limit: number;
     limitLast: boolean;
+    done: boolean;
     constructor(oth: Subscription | QuerySubscription);
     add(cb: Handler): void;
     remove(cb: Handler): void;
