@@ -44,6 +44,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     constructor(private sock :Socket, private baseUrl :string) {
         dbgRoot('Building root %s for socket %s', baseUrl, sock?sock.id:'NONE');
+        this.data = {};
+        markIncomplete(this.data);
         if (sock) {
             sock.on('v', (msg:any)=>this.receivedValue(msg));
             sock.on('qd', (msg:any)=>this.receivedQueryDone(msg));
@@ -52,7 +54,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     private subscriptions :{[index:string]:Subscription} = {};
-    private data :any = {};
+    private data :any;
     private queries :{[index:string]:QuerySubscription} = {};
 
     private doneProm :Promise<any> = null;
@@ -94,24 +96,24 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     receivedValue(msg :any) {
-        dbgIo('Received Value %o', msg);
+        dbgIo('Received Value for %s : %o', msg.p, msg);
         this.handleChange(msg.p, msg.v);
         if (msg.q) {
             var val = msg.v;
-            val.$l = true;
             this.handleQueryChange(msg.q, msg.p, val);
         }
     }
 
     receivedQueryDone(msg :any) {
-        dbgIo('Received QueryDone %o', msg);
+        dbgIo('Received QueryDone for %s : %o', msg.q, msg);
         var qdef = this.queries[msg.q];
         if (!qdef) return;
+        qdef.done = true;
         this.handleQueryChange(msg.q, qdef.path, {$i:true,$d:true});
     }
 
     receivedQueryExit(msg :any) {
-        dbgIo('Received QueryExit %o', msg);
+        dbgIo('Received QueryExit for %s : %o', msg.q, msg);
         var qdef = this.queries[msg.q];
         if (!qdef) return;
         this.handleQueryChange(msg.q, msg.p, null);
@@ -194,11 +196,14 @@ export class RDb3Root implements Spi.DbTreeRoot {
         if (path == '') {
             // Special case for root
             this.data = {};
+            markIncomplete(this.data);
         } else {
             var ch = findChain(Utils.parentPath(path), this.data);
             var leaf = Utils.leafPath(path);
             var lst = ch.pop();
-            delete lst[leaf];
+            if (lst) {
+                delete lst[leaf];
+            }
         }
     }
 
@@ -250,6 +255,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             markIncomplete(nnv);
             nv = nnv;
         }
+        nv.$l = !def.done;
 
         if (!this.data['q'+id]) this.data['q'+id] = {};
         nv['$sorter'] = this.data['q'+id]['$sorter'] = def.makeSorter();
@@ -278,7 +284,14 @@ export class RDb3Root implements Spi.DbTreeRoot {
             if (!acval || typeof(acval) !== 'object') {
                 changed = true;
                 acval = {};
+                if (isIncomplete(newval)) {
+                    markIncomplete(acval);
+                }
                 parentval[leaf] = acval;
+            }
+            if (!isIncomplete(newval) && isIncomplete(acval)) {
+                markComplete(acval);
+                changed = true;
             }
 
             // Look children of the new value
@@ -296,11 +309,16 @@ export class RDb3Root implements Spi.DbTreeRoot {
                         this.broadcastChildRemoved(path, k, presnap, queryPath);
                         // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
                         //this.broadcastChildMoved(path, k, acval[k]);
+                        // If we are in a query, really remove the child, no need for KNOWN_NULL
+                        if (queryPath) delete acval[k];
                         changed = true;
                     }
                 } else if (typeof(pre) === 'undefined') {
                     // Child added
                     pre = {};
+                    if (isIncomplete(newc)) {
+                        markIncomplete(pre);
+                    }
                     acval[k] = pre;
                     changed = true;
                     this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k);
@@ -334,7 +352,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     }
                 }
             }
-            if ((changed && !newval.$l) || newval.$d) {
+            if ((changed && !newval.$l && !isIncomplete(acval)) || newval.$d) {
                 this.broadcastValue(path, acval, queryPath);
             }
             return changed;
@@ -343,9 +361,26 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 this.broadcastValue(path, newval, queryPath);
                 return true;
             }
-            if (parentval[leaf] != newval) {
+            if (newval === null) {
+                if (queryPath) {
+                    // If in a query, don't use known nulls
+                    if (parentval[leaf] != null) {
+                        delete parentval[leaf];
+                        this.broadcastValue(path, null, queryPath);
+                        return true;
+                    }
+                } else {
+                    if (parentval[leaf] != KNOWN_NULL) {
+                        // keep "known missings", to avoid broadcasting this event over and over if it happens
+                        parentval[leaf] = KNOWN_NULL;
+                        this.broadcastValue(path, KNOWN_NULL, queryPath);
+                        return true;
+                    }
+                }
+            } else if (parentval[leaf] != newval) {
                 if (newval === null) {
-                    delete parentval[leaf];
+                    parentval[leaf] = KNOWN_NULL;
+                    //delete parentval[leaf];
                     // TODO we should probably propagate the nullification downwards to trigger value changed on who's listening below us
                     // Except when in a query, removal from a query deos not mean the element does not exist anymore
                 } else {
@@ -353,10 +388,6 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 }
                 this.broadcastValue(path, newval, queryPath);
                 return true;
-            } else if (newval === null) {
-                // TODO we should keep somehow a list of "known missings", to avoid broadcasting this event over and over if it happens
-                // Always broadcast values null
-                this.broadcastValue(path, newval, queryPath);
             }
             return false;
         }
@@ -501,7 +532,7 @@ class ValueCbHandler extends Handler {
     init() {
         this.eventType = 'value';
         var acval = this.getValue();
-        if (acval !== null && typeof(acval) !== 'undefined') {
+        if (acval !== null && typeof(acval) !== 'undefined' && !isIncomplete(acval)) {
             dbgEvt('%s Send initial event %s value:%o', this._intid, this.tree.url, acval);
             this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url));
         }
@@ -569,7 +600,15 @@ export class RDb3Snap implements Spi.DbTreeSnap {
         reclone = true
     ) {
         if (data != null && typeof (data) !== undefined && reclone) {
-            this.data = JSON.parse(JSON.stringify(data));
+            var str = JSON.stringify(data);
+            if (str === undefined || str === 'undefined') {
+                this.data = undefined;
+            } else if (str === null || str === 'null') {
+                this.data = null;
+            } else {
+                this.data = JSON.parse(str);
+            }
+            
             if (data['$sorter']) this.data['$sorter'] = data['$sorter'];
         } else {
             this.data = data;
@@ -613,6 +652,7 @@ export class RDb3Snap implements Spi.DbTreeSnap {
 type SortFunction = (a: any, b: any) => number;
 
 function getKeysOrdered(obj: any, fn?: SortFunction): string[] {
+    if (!obj) return [];
     fn = fn || obj['$sorter'];
     var sortFn: SortFunction = null;
     if (fn) {
@@ -700,13 +740,23 @@ function findChain<T>(url: string | string[], from: T, leaf = true, create = fal
 }
 
 function markIncomplete(obj :any) {
-    Object.defineProperty(obj, '$i', {enumerable:false, value:true});
+    Object.defineProperty(obj, '$i', {enumerable:false, configurable:true, value:true});
 }
+
+function markComplete(obj :any) {
+    delete obj.$i;
+    //Object.defineProperty(obj, '$i', {enumerable:false, value:false});
+}
+
 
 function isIncomplete(obj :any) :boolean {
-    return !!obj['$i'];
+    return obj && typeof(obj) === 'object' && !!obj['$i'];
 }
 
+var KNOWN_NULL = {
+    toJSON : ()=><any>undefined,
+    $i :false
+}
 
 export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
 
@@ -898,6 +948,8 @@ export class QuerySubscription extends Subscription {
     equals: string | number;
     limit: number = null;
     limitLast = false;
+
+    done = false;
 
     constructor(oth: Subscription | QuerySubscription) {
         super(oth.root, oth.path);

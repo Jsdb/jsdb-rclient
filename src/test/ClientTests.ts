@@ -24,6 +24,7 @@ describe('RDb3Client >', () => {
         describe('Reading >', () => {
             it('Should not find root non existing data', () => {
                 assert("Should return undefined", root.getValue('/node'), is.undefined);
+                assert("Should not have polluted data", root.data, is.strictly.object.matching({}));
             });
             it('Should find root existing data', () => {
                 root.data['node'] = 'ciao';
@@ -81,7 +82,7 @@ describe('RDb3Client >', () => {
             it('Should overwrite subs', () => {
                 root.handleChange('/node/sub2', 'altro');
                 root.handleChange('/node', { sub1: 'ciao' });
-                assert("Should return merged object", root.data['node']['sub2'], is.undefined);
+                assert("Should return merged object", JSON.stringify(root.data['node']['sub2']), is.undefined);
             });
         });
     });
@@ -214,7 +215,7 @@ describe('RDb3Client >', () => {
 
                 root.handleChange('/node', {d:5});
 
-                assert("Right events in right order", evts, is.array.equals(['ca','cr']));
+                assert("Right events in right order after off", evts, is.array.equals(['ca','cr']));
 
                 ref.off('child_added', fn_child_added);
                 ref.off('child_removed', fn_child_removed);
@@ -233,6 +234,24 @@ describe('RDb3Client >', () => {
 
                 assert("Received event", snap, is.truthy);
                 assert("Recevied event data", snap.val(), 'ciao');
+            });
+
+            it('Should not send a value for existing but not loaded data', ()=>{
+                root.handleChange('/node/data/sub', 'ciao');
+                
+                assert("/node is incomplete", root.data['node'].$i, true);
+                assert("/node/data is incomplete", root.data['node']['data'].$i, true);
+
+                var ref = root.getUrl('/node/');
+                var snap: Client.RDb3Snap;
+                var fn = ref.on('value', (data) => snap = data);
+
+                assert("Not yet received event", snap, is.falsey);
+
+                root.handleChange('/node', {data: {sub:'ciao'}});
+
+                assert("Received event", snap, is.truthy);
+                assert("Recevied event data", snap.val(), is.strictly.object.matching({data: {sub:'ciao'}}));
             });
 
             it('Should send a value event with once', () => {
@@ -261,21 +280,26 @@ describe('RDb3Client >', () => {
             });
 
             it('Should send a value event for inner additions', () => {
+                root.handleChange('/node', {oth:'pippo'});
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
+                snap = null;
+
                 root.handleChange('/node/data', 'ciao');
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
-                assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
+                assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao', oth: 'pippo' }));
             });
 
             it('Should send a value event for inner changes', () => {
                 var ref = root.getUrl('/node');
-                root.handleChange('/node/data', 'bau');
+                root.handleChange('/node', {'data':'bau'});
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
+                snap = null;
+
                 root.handleChange('/node/data', 'ciao');
 
                 assert("Received event", snap, is.truthy);
@@ -283,16 +307,26 @@ describe('RDb3Client >', () => {
                 assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
             });
 
-            it('Should send a value event for confirmed null', () => {
+        });
+
+        describe('Known missing >', ()=>{
+            it('Should send a value event for confirmed null, also on second call', () => {
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
-                ref.on('value', (data) => snap = data);
+                var cb = ref.on('value', (data) => snap = data);
                 root.handleChange('/node', null);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is non existing", snap.exists(), false);
-            });
 
+                snap = null;
+
+                ref.on('value', (data) => snap = data);
+                ref.off('value', cb);
+
+                assert("Received second value event", snap, is.truthy);
+                assert("Snapshot is non existing", snap.exists(), false);
+            });
         });
 
         describe('Child diff events >', () => {
@@ -623,7 +657,7 @@ describe('RDb3Client >', () => {
 
                 adds=[];
 
-                root.handleQueryChange('1a', '/list/d/val', 1);
+                root.handleQueryChange('1a', '/list/d', {val:1});
 
                 assert("Received new child_added", adds, is.array.withLength(1));
                 assert("Received child_removed", rems, is.array.withLength(1));
