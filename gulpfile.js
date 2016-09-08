@@ -59,7 +59,9 @@ var UMDGlobal = ''+
 '        define(["require", "exports"], factory);'+
 '    } else {'+
 '        var glb = typeof window !== \'undefined\' ? window : global;'+
-'        glb[\'TsdbRClient\'] = factory(null, {});'+
+'        var exp = {};' +
+'        glb[\'TsdbRClient\'] = exp;'+
+'        factory(null, exp);'+
 '    }\n';
 
 
