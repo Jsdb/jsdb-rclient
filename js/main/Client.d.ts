@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160912_185839_master_1.0.0_f763596
+ * TSDB remote client 20160912_190342_master_1.0.0_8e7cbcd
  */
 import { Spi, Api } from 'jsdb';
 export interface Socket {

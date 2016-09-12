@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160912_185839_master_1.0.0_f763596
+ * TSDB remote client 20160912_190342_master_1.0.0_8e7cbcd
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,8 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    var lvv = 0;
-    exports.VERSION = '20160912_185839_master_1.0.0_f763596';
+    exports.VERSION = '20160912_190342_master_1.0.0_8e7cbcd';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -102,7 +101,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
         };
         RDb3Root.prototype.receivedValue = function (msg) {
-            dbgIo('Received Value %s for %s : %o', lvv++, msg.p, msg);
+            dbgIo('Received Value v %s for "%s" : %o', msg.n, msg.p, msg);
             this.handleChange(msg.p, msg.v, msg.n);
             if (msg.q) {
                 var val = msg.v;
@@ -118,7 +117,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.handleQueryChange(msg.q, qdef.path, { $i: true, $d: true }, this.writeProg);
         };
         RDb3Root.prototype.receivedQueryExit = function (msg) {
-            dbgIo('Received QueryExit for %s : %o', msg.q, msg);
+            dbgIo('Received QueryExit v %s for "%s" : %o', msg.n, msg.q, msg);
             var qdef = this.queries[msg.q];
             if (!qdef)
                 return;
