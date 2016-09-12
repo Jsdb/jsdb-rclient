@@ -1,6 +1,6 @@
 import * as Debug from 'debug';
 
-Debug.enable('tsdb:*');
+//Debug.enable('tsdb:*');
 
 import * as Client from '../main/Client';
 import * as SocketIO from 'socket.io';
@@ -11,6 +11,8 @@ import {assert, is} from 'tsmatchers';
 interface TestDb3Root {
     data: any;
 }
+
+var dummyProg = 1;
 
 var root: Client.RDb3Root & TestDb3Root;
 
@@ -53,36 +55,101 @@ describe('RDb3Client >', () => {
 
         describe('Writing >', () => {
             it('Should write root primitive', () => {
-                root.handleChange('/node', 'ciao');
+                root.handleChange('/node', 'ciao', dummyProg++);
                 assert("Should return string", root.data['node'], 'ciao');
             });
             it('Should write sub primitive', () => {
-                root.handleChange('/node/sub', 'ciao');
+                root.handleChange('/node/sub', 'ciao', dummyProg++);
                 assert("Should return string", root.data['node']['sub'], 'ciao');
             });
             it('Should write sub primitive with alternative url', () => {
-                root.handleChange('node/sub/', 'ciao');
+                root.handleChange('node/sub/', 'ciao', dummyProg++);
                 assert("Should return string", root.data['node']['sub'], 'ciao');
             });
             it('Should write object', () => {
-                root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' });
+                root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' }, dummyProg++);
                 assert("Should return plain object", root.data['node'], is.object.matching({
                     sub1: 'ciao',
                     sub2: 'altro'
                 }));
             });
             it('Should merge subs', () => {
-                root.handleChange('/node', { sub1: 'ciao' });
-                root.handleChange('/node/sub2', 'altro');
+                root.handleChange('/node', { sub1: 'ciao' }, dummyProg++);
+                root.handleChange('/node/sub2', 'altro', dummyProg++);
                 assert("Should return merged object", root.data['node'], is.object.matching({
                     sub1: 'ciao',
                     sub2: 'altro'
                 }));
             });
             it('Should overwrite subs', () => {
-                root.handleChange('/node/sub2', 'altro');
-                root.handleChange('/node', { sub1: 'ciao' });
+                root.handleChange('/node/sub2', 'altro', dummyProg++);
+                root.handleChange('/node', { sub1: 'ciao' }, dummyProg++);
                 assert("Should return merged object", JSON.stringify(root.data['node']['sub2']), is.undefined);
+            });
+
+            describe('Versioned >', ()=>{
+                it('Should not override leaf with previous version', ()=>{
+                    root.handleChange('/node/sub2', 'altro', 2);
+                    root.handleChange('/node/sub2', 'ultro', 1);
+                    assert("Should be the first version", root.data['node'], is.object.matching({
+                        sub2: 'altro'
+                    }));
+                });
+
+                it('Should not override object with previous version', ()=>{
+                    root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' }, 2);
+                    root.handleChange('/node', { sub1: 'aaa', sub2: 'bbb' }, 1);
+
+                    assert("Should be the first version", root.data['node'], is.object.matching({
+                        sub1: 'ciao',
+                        sub2: 'altro'
+                    }));
+
+                    root.handleChange('/node/sub2', 'ultro', 1);
+                    
+                    assert("Should be the first version", root.data['node'], is.object.matching({
+                        sub1: 'ciao',
+                        sub2: 'altro'
+                    }));
+                });
+
+                it('Should not override object with previous null', ()=>{
+                    root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' }, 2);
+                    root.handleChange('/node/sub3', 'ancora', 3);
+                    root.handleChange('/node', { sub1: 'aaa'}, 2);
+
+                    assert("Should ignore missing sub3", root.data['node'], is.object.matching({
+                        sub1: 'aaa',
+                        sub3: 'ancora'
+                    }));
+
+                    root.handleChange('/node/sub3', null, 2);
+                    
+                    assert("Should ignore explicit nullified sub3", root.data['node'], is.object.matching({
+                        sub1: 'aaa',
+                        sub3: 'ancora'
+                    }));
+                });
+                
+
+                it('Should override partials with previous version', ()=>{
+                    root.handleChange('/node', { sub1: 'aaa', sub2: 'bbb' }, 1);
+                    root.handleChange('/node/sub2', 'altro', 4);
+                    root.handleChange('/node/sub1', 'ciao', 2);
+
+                    assert("Should be a mix of versions", root.data['node'], is.object.matching({
+                        sub1: 'ciao',
+                        sub2: 'altro'
+                    }));
+
+                    root.handleChange('/node', {sub1: 'leaks', sub2: 'doesnot' }, 3);
+                    
+                    assert("Should be the first version", root.data['node'], is.object.matching({
+                        sub1: 'leaks',
+                        sub2: 'altro'
+                    }));
+                });
+                
             });
         });
     });
@@ -188,14 +255,14 @@ describe('RDb3Client >', () => {
                 var snap: Client.RDb3Snap;
                 var ctx = "ciao";
                 var fn = ref.on('value', (data) => snap = data, null, ctx);
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Recevied event data", snap.val(), 'ciao');
 
                 snap = null;
                 ref.off('value', fn, ctx);
-                root.handleChange('/node/data', 'ciao2');
+                root.handleChange('/node/data', 'ciao2', dummyProg++);
                 assert("Should not receive another event", snap, is.falsey);
             });
 
@@ -205,15 +272,15 @@ describe('RDb3Client >', () => {
                 var fn_value = ref.on('value', (data) => evts.push('v'));
                 var fn_child_added = ref.on('child_added', (data) => evts.push('ca'));
                 var fn_child_removed = ref.on('child_removed', (data) => evts.push('cr'));
-                root.handleChange('/node', {a:1});
-                root.handleChange('/node', {c:3});
+                root.handleChange('/node', {a:1}, dummyProg++);
+                root.handleChange('/node', {c:3}, dummyProg++);
 
                 assert("Right events in right order", evts, is.array.equals(['ca','v','ca','cr','v']));
 
                 ref.off('value', fn_value);
                 evts = [];
 
-                root.handleChange('/node', {d:5});
+                root.handleChange('/node', {d:5}, dummyProg++);
 
                 assert("Right events in right order after off", evts, is.array.equals(['ca','cr']));
 
@@ -221,13 +288,13 @@ describe('RDb3Client >', () => {
                 ref.off('child_removed', fn_child_removed);
                 evts = [];
 
-                root.handleChange('/node', {e:5});
+                root.handleChange('/node', {e:5}, dummyProg++);
 
                 assert("No more events", evts, is.array.withLength(0));
             });
 
             it('Should send a value event for already existing data', () => {
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
                 var ref = root.getUrl('/node/data');
                 var snap: Client.RDb3Snap;
                 var fn = ref.on('value', (data) => snap = data);
@@ -237,7 +304,7 @@ describe('RDb3Client >', () => {
             });
 
             it('Should not send a value for existing but not loaded data', ()=>{
-                root.handleChange('/node/data/sub', 'ciao');
+                root.handleChange('/node/data/sub', 'ciao', dummyProg++);
                 
                 assert("/node is incomplete", root.data['node'].$i, true);
                 assert("/node/data is incomplete", root.data['node']['data'].$i, true);
@@ -248,7 +315,7 @@ describe('RDb3Client >', () => {
 
                 assert("Not yet received event", snap, is.falsey);
 
-                root.handleChange('/node', {data: {sub:'ciao'}});
+                root.handleChange('/node', {data: {sub:'ciao'}}, dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Recevied event data", snap.val(), is.strictly.object.matching({data: {sub:'ciao'}}));
@@ -258,13 +325,13 @@ describe('RDb3Client >', () => {
                 var ref = root.getUrl('/node/data');
                 var snap: Client.RDb3Snap;
                 ref.once('value', (data) => snap = data);
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Recevied event data", snap.val(), 'ciao');
 
                 snap = null;
-                root.handleChange('/node/data', 'ciao2');
+                root.handleChange('/node/data', 'ciao2', dummyProg++);
                 assert("Should not receive another event", snap, is.falsey);
             });
 
@@ -272,7 +339,7 @@ describe('RDb3Client >', () => {
                 var ref = root.getUrl('/node/data');
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
-                root.handleChange('/node', { pippo: 'puppo', data: 'ciao' });
+                root.handleChange('/node', { pippo: 'puppo', data: 'ciao' }, dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot exists", snap.exists(), true);
@@ -280,13 +347,13 @@ describe('RDb3Client >', () => {
             });
 
             it('Should send a value event for inner additions', () => {
-                root.handleChange('/node', {oth:'pippo'});
+                root.handleChange('/node', {oth:'pippo'}, dummyProg++);
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
                 snap = null;
 
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
@@ -295,12 +362,12 @@ describe('RDb3Client >', () => {
 
             it('Should send a value event for inner changes', () => {
                 var ref = root.getUrl('/node');
-                root.handleChange('/node', {'data':'bau'});
+                root.handleChange('/node', {'data':'bau'}, dummyProg++);
                 var snap: Client.RDb3Snap;
                 ref.on('value', (data) => snap = data);
                 snap = null;
 
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
@@ -314,7 +381,7 @@ describe('RDb3Client >', () => {
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 var cb = ref.on('value', (data) => snap = data);
-                root.handleChange('/node', null);
+                root.handleChange('/node', null, dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is non existing", snap.exists(), false);
@@ -327,6 +394,21 @@ describe('RDb3Client >', () => {
                 assert("Received second value event", snap, is.truthy);
                 assert("Snapshot is non existing", snap.exists(), false);
             });
+
+            it('Should properly replace a known missing with a new value', () => {
+                var ref = root.getUrl('/node');
+                root.handleChange('/node/sub1', null, dummyProg++);
+                root.handleChange('/node/sub2', null, dummyProg++);
+                root.handleChange('/node/sub1', {name:'simone'}, dummyProg++);
+                root.handleChange('/node', {'sub2': {name:'simone'}}, dummyProg++);
+
+                var ref = root.getUrl('/node');
+                var snap: Client.RDb3Snap;
+                var cb = ref.on('value', (data) => snap = data);
+                
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is non existing", snap.exists(), true);
+            });
         });
 
         describe('Child diff events >', () => {
@@ -336,7 +418,7 @@ describe('RDb3Client >', () => {
                 ref.on('child_added', (data) => {
                     snap = data;
                 });
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is existing", snap.exists(), true);
@@ -348,7 +430,7 @@ describe('RDb3Client >', () => {
                 var ref = root.getUrl('/node');
                 var snaps: Client.RDb3Snap[] = [];
                 ref.on('child_added', (data) => snaps.push(data));
-                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' });
+                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' }, dummyProg++);
 
                 assert("Received events", snaps, is.array.withLength(2));
             });
@@ -357,17 +439,17 @@ describe('RDb3Client >', () => {
                 var ref = root.getUrl('/node');
                 var snaps: Client.RDb3Snap[] = [];
                 ref.on('child_added', (data) => snaps.push(data));
-                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' });
+                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' }, dummyProg++);
 
                 assert("Received events", snaps, is.array.withLength(2));
 
                 snaps = [];
-                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' });
+                root.handleChange('/node', { data1: 'ciao', data2: 'riciao' }, dummyProg++);
                 assert("Received events", snaps, is.array.withLength(0));
             });
 
             it('Should send initial child_added from existing', () => {
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('child_added', (data) => snap = data);
@@ -379,12 +461,12 @@ describe('RDb3Client >', () => {
             });
 
             it('Should send child_removed on explict parent replace', () => {
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('child_removed', (data) => snap = data);
 
-                root.handleChange('/node', { data2: 'ciao' });
+                root.handleChange('/node', { data2: 'ciao' }, dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot exists", snap.exists(), true);
@@ -393,12 +475,12 @@ describe('RDb3Client >', () => {
             });
 
             it('Should send child_removed on partial update', () => {
-                root.handleChange('/node/data', 'ciao');
+                root.handleChange('/node/data', 'ciao', dummyProg++);
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 ref.on('child_removed', (data) => snap = data);
 
-                root.handleChange('/node', { data: null, $i: true });
+                root.handleChange('/node', { data: null, $i: true }, dummyProg++);
 
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot exists", snap.exists(), true);
@@ -407,7 +489,7 @@ describe('RDb3Client >', () => {
             });
 
             it('Should combine child added, removed and value', () => {
-                root.handleChange('/list', { a: 1, b: 2, c: 3, d: 4 });
+                root.handleChange('/list', { a: 1, b: 2, c: 3, d: 4 }, dummyProg++);
 
                 var ref = root.getUrl('/list');
                 var adds: Client.RDb3Snap[] = [];
@@ -421,7 +503,7 @@ describe('RDb3Client >', () => {
 
                 adds = [];
 
-                root.handleChange('/list', { a: 1, c: 3, e: 5, f: 6 });
+                root.handleChange('/list', { a: 1, c: 3, e: 5, f: 6 }, dummyProg++);
 
                 assert("Received new child_addeds", adds, is.array.withLength(2));
                 assert("Received new child_removed", rems, is.array.withLength(2));
@@ -443,7 +525,7 @@ describe('RDb3Client >', () => {
             */
 
             it('Should send child_changed', () => {
-                root.handleChange('/list', { a: 1, b: 2, c: 3 });
+                root.handleChange('/list', { a: 1, b: 2, c: 3 }, dummyProg++);
 
                 var ref = root.getUrl('/list');
                 var movs: Client.RDb3Snap[] = [];
@@ -452,13 +534,13 @@ describe('RDb3Client >', () => {
 
                 assert("Received no initial child_changed", movs, is.array.withLength(0));
 
-                root.handleChange('/list', { b: 2, a: 1, c: 4 });
+                root.handleChange('/list', { b: 2, a: 1, c: 4 }, dummyProg++);
 
                 assert("Received new child_changed", movs, is.array.withLength(1));
             });
 
             it('Should send child_changed for deep change', () => {
-                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } });
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
 
                 var ref = root.getUrl('/list');
                 var movs: Client.RDb3Snap[] = [];
@@ -467,7 +549,7 @@ describe('RDb3Client >', () => {
 
                 assert("Received no initial child_changed", movs, is.array.withLength(0));
 
-                root.handleChange('/list', { b: { val: 2 }, a: { val: 1 }, c: { val: 4 } });
+                root.handleChange('/list', { b: { val: 2 }, a: { val: 1 }, c: { val: 4 } }, dummyProg++);
 
                 assert("Received new child_changed", movs, is.array.withLength(1));
             });
@@ -493,7 +575,7 @@ describe('RDb3Client >', () => {
                 var adds: Client.RDb3Snap[] = [];
                 ref.on('child_added', (data) => adds.push(data));
 
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 }, $l :true });
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 }, $l :true }, dummyProg++);
 
                 assert("Received child_added", adds, is.array.withLength(3));
                 for (var i = 0; i < adds.length; i++) {
@@ -502,7 +584,7 @@ describe('RDb3Client >', () => {
 
                 assert("Value events not sent yet", value, is.falsey);
 
-                root.handleQueryChange('1a', '/list', { $i :true, $d :true });
+                root.handleQueryChange('1a', '/list', { $i :true, $d :true }, dummyProg++);
 
                 assert("Value events sent correctly", value, is.strictly.object.matching({a:is.object, b:is.object, c:is.object}));
 
@@ -511,14 +593,14 @@ describe('RDb3Client >', () => {
                 ref.on('child_removed', (data) => rems.push(data));
                 ref.on('child_changed', (data) => chng.push(data));
 
-                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 4 }, $i:true });
+                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 4 }, $i:true }, dummyProg++);
 
                 assert("Received child_changed", chng, is.array.withLength(2));
                 for (var i = 0; i < chng.length; i++) {
                     assert("Received snapshots does not expose url meta-path", chng[i].ref().url.substr(0,6), '/list/');
                 }
 
-                root.handleQueryChange('1a', '/list', { b: { val: 4 } });
+                root.handleQueryChange('1a', '/list', { b: { val: 4 } }, dummyProg++);
                 assert("Received child_removed", rems, is.array.withLength(2));
                 for (var i = 0; i < rems.length; i++) {
                     assert("Received snapshots does not expose url meta-path", rems[i].ref().url.substr(0,6), '/list/');
@@ -536,18 +618,18 @@ describe('RDb3Client >', () => {
                 ref.on('child_changed', (data) => chng.push(data));
 
 
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } });
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
 
                 assert("Received child_changed", chng, is.array.withLength(0));
 
-                root.handleQueryChange('1a', '/list/a/val', 5);
+                root.handleQueryChange('1a', '/list/a/val', 5, dummyProg++);
 
                 assert("Received child_changed", chng, is.array.withLength(1));
                 for (var i = 0; i < chng.length; i++) {
                     assert("Received changed snapshots does not expose url meta-path", chng[i].ref().url.substr(0,6), '/list/');
                 }
 
-                root.handleQueryChange('1a', '/list/b', null);
+                root.handleQueryChange('1a', '/list/b', null, dummyProg++);
                 assert("Received child_removed", rems, is.array.withLength(1));
                 for (var i = 0; i < rems.length; i++) {
                     assert("Received removed snapshots does not expose url meta-path", rems[i].ref().url.substr(0,6), '/list/');
@@ -559,7 +641,7 @@ describe('RDb3Client >', () => {
             it('Should return only "valued" entries', ()=>{
                 var ref = root.getUrl('/users');
 
-                root.handleChange('/users', { u1: {name: 'sara'}, u2: {name: 'simone'}});
+                root.handleChange('/users', { u1: {name: 'sara'}, u2: {name: 'simone'}}, dummyProg++);
 
                 
                 ref = ref.orderByChild('name').equalTo('mario');
@@ -573,7 +655,7 @@ describe('RDb3Client >', () => {
                 assert("Should have sent no values", vals, is.array.withLength(0));
                 assert("Should have sent no added", adds, is.array.withLength(0));
 
-                root.handleQueryChange('1a', '/list', { u3: {name: 'mario'}, $d:true });
+                root.handleQueryChange('1a', '/list', { u3: {name: 'mario'}, $d:true }, dummyProg++);
 
                 assert("Received child_added", adds, is.array.withLength(1));
                 assert("Received value", vals, is.array.withLength(1));
@@ -600,7 +682,7 @@ describe('RDb3Client >', () => {
                 var items :string[] = [];
                 ref.on('child_added', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
 
-                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 2 }, c: { val: 1 } });
+                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 2 }, c: { val: 1 } }, dummyProg++);
 
                 assert("Received child_added", adds, is.array.withLength(3));
                 assert("Kys are sorted", items, is.array.equals(['c','b','a']));
@@ -614,14 +696,14 @@ describe('RDb3Client >', () => {
 
                 ref.on('child_added', (data,prek) => {});
 
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 3 }, c: { val: 5 } });
+                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 3 }, c: { val: 5 } }, dummyProg++);
 
                 var adds :Client.RDb3Snap[] = [];
                 var preks :string[] = []; 
                 var items :string[] = [];
                 ref.on('child_changed', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
 
-                root.handleQueryChange('1a', '/list/c/val', 2);
+                root.handleQueryChange('1a', '/list/c/val', 2, dummyProg++);
 
                 assert("Kys are sorted", items, is.array.equals(['c']));
                 assert("Pre keys are correct", preks, is.array.equals(['a']));
@@ -632,7 +714,7 @@ describe('RDb3Client >', () => {
                 var items :string[] = [];
                 ref.on('child_moved', (data,prek) => {adds.push(data);preks.push(prek);items.push(data.key())});
 
-                root.handleQueryChange('1a', '/list/c/val', 5);
+                root.handleQueryChange('1a', '/list/c/val', 5, dummyProg++);
 
                 assert("Kys are sorted", items, is.array.equals(['c']));
                 assert("Pre keys are correct", preks, is.array.equals(['b']));
@@ -651,22 +733,22 @@ describe('RDb3Client >', () => {
                 var rems :Client.RDb3Snap[] = [];
                 ref.on('child_removed', (data,prek) => {rems.push(data)});
 
-                root.handleQueryChange('1a', '/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } });
+                root.handleQueryChange('1a', '/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } }, dummyProg++);
 
                 assert("Received child_added", adds, is.array.withLength(3));
 
                 adds=[];
 
-                root.handleQueryChange('1a', '/list/d', {val:1});
+                root.handleQueryChange('1a', '/list/d', {val:1}, dummyProg++);
 
                 assert("Received new child_added", adds, is.array.withLength(1));
                 assert("Received child_removed", rems, is.array.withLength(1));
                 assert("Removed the last element", rems[0].key(), 'c');
 
-                root.handleQueryChange('1a', '/list/d/val', 7);
+                root.handleQueryChange('1a', '/list/d/val', 7, dummyProg++);
                 adds = [];
                 rems = [];
-                root.handleQueryChange('1a', '/list', { x:{val:1}, y:{val:2}, $i:true});
+                root.handleQueryChange('1a', '/list', { x:{val:1}, y:{val:2}, $i:true}, dummyProg++);
 
                 assert("Received new child_added", adds, is.array.withLength(2));
                 assert("Received child_removed", rems, is.array.withLength(2));
