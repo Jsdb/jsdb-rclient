@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160908_135515_master_1.0.0_4cd8117
+ * TSDB remote client 20160912_185839_master_1.0.0_f763596
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,7 +15,8 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160908_135515_master_1.0.0_4cd8117';
+    var lvv = 0;
+    exports.VERSION = '20160912_185839_master_1.0.0_f763596';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -49,6 +50,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.subscriptions = {};
             this.queries = {};
             this.doneProm = null;
+            this.writeProg = 1;
             dbgRoot('Building root %s for socket %s', baseUrl, sock ? sock.id : 'NONE');
             this.data = {};
             markIncomplete(this.data);
@@ -58,6 +60,10 @@ var __extends = (this && this.__extends) || function (d, b) {
                 sock.on('qx', function (msg) { return _this.receivedQueryExit(msg); });
             }
         }
+        RDb3Root.prototype.nextProg = function () {
+            this.writeProg++;
+            return this.writeProg;
+        };
         RDb3Root.prototype.getUrl = function (url) {
             return new RDb3Tree(this, Utils.normalizePath(this.makeRelative(url)));
         };
@@ -96,11 +102,11 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
         };
         RDb3Root.prototype.receivedValue = function (msg) {
-            dbgIo('Received Value for %s : %o', msg.p, msg);
-            this.handleChange(msg.p, msg.v);
+            dbgIo('Received Value %s for %s : %o', lvv++, msg.p, msg);
+            this.handleChange(msg.p, msg.v, msg.n);
             if (msg.q) {
                 var val = msg.v;
-                this.handleQueryChange(msg.q, msg.p, val);
+                this.handleQueryChange(msg.q, msg.p, val, msg.n);
             }
         };
         RDb3Root.prototype.receivedQueryDone = function (msg) {
@@ -109,14 +115,14 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (!qdef)
                 return;
             qdef.done = true;
-            this.handleQueryChange(msg.q, qdef.path, { $i: true, $d: true });
+            this.handleQueryChange(msg.q, qdef.path, { $i: true, $d: true }, this.writeProg);
         };
         RDb3Root.prototype.receivedQueryExit = function (msg) {
             dbgIo('Received QueryExit for %s : %o', msg.q, msg);
             var qdef = this.queries[msg.q];
             if (!qdef)
                 return;
-            this.handleQueryChange(msg.q, msg.p, null);
+            this.handleQueryChange(msg.q, msg.p, null, msg.n);
         };
         RDb3Root.prototype.send = function () {
             var args = [];
@@ -218,7 +224,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             var ret = findChain(url, this.data, true, false);
             return ret.pop();
         };
-        RDb3Root.prototype.handleChange = function (path, val) {
+        RDb3Root.prototype.handleChange = function (path, val, prog) {
             // Normalize the path to "/" by wrapping the val
             var nv = val;
             var sp = splitUrl(path);
@@ -229,9 +235,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                 markIncomplete(nnv);
                 nv = nnv;
             }
-            this.recurseApplyBroadcast(nv, this.data, null, '');
+            this.recurseApplyBroadcast(nv, this.data, null, '', prog);
         };
-        RDb3Root.prototype.handleQueryChange = function (id, path, val) {
+        RDb3Root.prototype.handleQueryChange = function (id, path, val, prog) {
             var def = this.queries[id];
             if (!def) {
                 // TODO stale query, send unsubscribe again?
@@ -251,7 +257,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (!this.data['q' + id])
                 this.data['q' + id] = {};
             nv['$sorter'] = this.data['q' + id]['$sorter'] = def.makeSorter();
-            this.recurseApplyBroadcast(nv, this.data['q' + id], this.data, '/q' + id, def.path);
+            this.recurseApplyBroadcast(nv, this.data['q' + id], this.data, '/q' + id, prog, def.path);
             if (def.limit) {
                 var acdata = this.data['q' + id];
                 var ks = getKeysOrdered(acdata);
@@ -262,16 +268,17 @@ var __extends = (this && this.__extends) || function (d, b) {
                         torem[k] = null;
                     }
                     markIncomplete(torem);
-                    this.recurseApplyBroadcast(torem, this.data['q' + id], this.data, '/q' + id, def.path);
+                    // TODO probably here the version should not be prog, given that the deletion are based on the current situation
+                    this.recurseApplyBroadcast(torem, this.data['q' + id], this.data, '/q' + id, prog, def.path);
                 }
             }
         };
-        RDb3Root.prototype.recurseApplyBroadcast = function (newval, acval, parentval, path, queryPath) {
+        RDb3Root.prototype.recurseApplyBroadcast = function (newval, acval, parentval, path, version, queryPath) {
             var leaf = Utils.leafPath(path);
             if (newval !== null && typeof (newval) === 'object') {
                 var changed = false;
                 // Change from native value to object
-                if (!acval || typeof (acval) !== 'object') {
+                if (acval === KNOWN_NULL || !acval || typeof (acval) !== 'object') {
                     changed = true;
                     acval = {};
                     if (isIncomplete(newval)) {
@@ -279,6 +286,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                     parentval[leaf] = acval;
                 }
+                var acversions = getVersions(acval);
                 if (!isIncomplete(newval) && isIncomplete(acval)) {
                     markComplete(acval);
                     changed = true;
@@ -291,10 +299,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                         continue;
                     var newc = newval[k];
                     var pre = acval[k];
+                    var prever = acversions[k];
+                    if (prever && prever > version)
+                        continue;
+                    if (!isIncomplete(newc)) {
+                        acversions[k] = version;
+                    }
                     if (newc === null) {
                         // Explicit delete
                         var presnap = new RDb3Snap(pre, this, (queryPath || path) + '/' + k);
-                        if (this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k)) {
+                        if (this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k, version)) {
                             this.broadcastChildRemoved(path, k, presnap, queryPath);
                             // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
                             //this.broadcastChildMoved(path, k, acval[k]);
@@ -304,7 +318,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                             changed = true;
                         }
                     }
-                    else if (typeof (pre) === 'undefined') {
+                    else if (pre === KNOWN_NULL || typeof (pre) === 'undefined') {
                         // Child added
                         pre = {};
                         if (isIncomplete(newc)) {
@@ -312,13 +326,13 @@ var __extends = (this && this.__extends) || function (d, b) {
                         }
                         acval[k] = pre;
                         changed = true;
-                        this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k);
+                        this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k, version);
                         this.broadcastChildAdded(path, k, acval[k], queryPath, findPreviousKey(acval, k));
                     }
                     else {
                         // Maybe child changed
                         var prepre = findPreviousKey(acval, k);
-                        if (this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k)) {
+                        if (this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k, version)) {
                             changed = true;
                             // TODO consider sorting and previous key
                             var acpre = findPreviousKey(acval, k);
@@ -332,10 +346,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                 if (!isIncomplete(newval)) {
                     // If newc is not incomplete, delete all the other children
                     for (var k in acval) {
+                        if (k.charAt(0) == '$')
+                            continue;
                         if (newval[k] === null || typeof (newval[k]) === 'undefined') {
+                            var prever = acversions[k];
+                            if (prever && prever > version)
+                                continue;
                             var pre = acval[k];
+                            acversions[k] = version;
                             var presnap = new RDb3Snap(pre, this, (queryPath || path) + '/' + k);
-                            if (this.recurseApplyBroadcast(null, pre, acval, path + '/' + k)) {
+                            if (this.recurseApplyBroadcast(null, pre, acval, path + '/' + k, version)) {
                                 this.broadcastChildRemoved(path, k, presnap, queryPath);
                                 // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
                                 //this.broadcastChildMoved(path, k, acval[k]);
@@ -351,6 +371,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             else {
                 if (!parentval || !leaf) {
+                    // This happens when root is set to null
                     this.broadcastValue(path, newval, queryPath);
                     return true;
                 }
@@ -430,7 +451,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                     throw new Error("Cannot find Socket.IO to start a connection to " + conf.baseUrl);
                 }
             }
-            return new RDb3Root(conf.socket, conf.baseUrl);
+            var ret = conf.socket.Db3Root || new RDb3Root(conf.socket, conf.baseUrl);
+            conf.socket.Db3Root = ret;
+            return ret;
         };
         return RDb3Root;
     }());
@@ -743,6 +766,14 @@ var __extends = (this && this.__extends) || function (d, b) {
     function isIncomplete(obj) {
         return obj && typeof (obj) === 'object' && !!obj['$i'];
     }
+    function getVersions(obj) {
+        var ret = obj['$v'];
+        if (!ret) {
+            Object.defineProperty(obj, '$v', { enumerable: false, configurable: true, value: {} });
+            ret = obj['$v'];
+        }
+        return ret;
+    }
     var KNOWN_NULL = {
         toJSON: function () { return undefined; },
         $i: false
@@ -868,7 +899,8 @@ var __extends = (this && this.__extends) || function (d, b) {
         * Writes data to this DbTree location.
         */
         RDb3Tree.prototype.set = function (value, onComplete) {
-            this.root.send('s', this.url, value, function (ack) {
+            var prog = this.root.nextProg();
+            this.root.send('s', this.url, value, prog, function (ack) {
                 if (onComplete) {
                     if (ack == 'k') {
                         onComplete(null);
@@ -878,13 +910,14 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                 }
             });
-            this.root.handleChange(this.url, value);
+            this.root.handleChange(this.url, value, prog);
         };
         /**
         * Writes the enumerated children to this DbTree location.
         */
         RDb3Tree.prototype.update = function (value, onComplete) {
-            this.root.send('m', this.url, value, function (ack) {
+            var prog = this.root.nextProg();
+            this.root.send('m', this.url, value, prog, function (ack) {
                 if (onComplete) {
                     if (ack == 'k') {
                         onComplete(null);
@@ -895,7 +928,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 }
             });
             for (var k in value) {
-                this.root.handleChange(this.url + '/' + k, value[k]);
+                this.root.handleChange(this.url + '/' + k, value[k], prog);
             }
         };
         /**

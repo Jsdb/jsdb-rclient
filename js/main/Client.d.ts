@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160908_135515_master_1.0.0_4cd8117
+ * TSDB remote client 20160912_185839_master_1.0.0_f763596
  */
 import { Spi, Api } from 'jsdb';
 export interface Socket {
@@ -20,6 +20,8 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     private data;
     private queries;
     private doneProm;
+    private writeProg;
+    nextProg(): number;
     getUrl(url: string): RDb3Tree;
     makeRelative(url: string): string;
     makeAbsolute(url: string): string;
@@ -38,16 +40,16 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     subscribeQuery(query: QuerySubscription): void;
     unsubscribeQuery(id: string): void;
     getValue(url: string | string[]): any;
-    handleChange(path: string, val: any): void;
-    handleQueryChange(id: string, path: string, val: any): void;
-    recurseApplyBroadcast(newval: any, acval: any, parentval: any, path: string, queryPath?: string): boolean;
+    handleChange(path: string, val: any, prog: number): void;
+    handleQueryChange(id: string, path: string, val: any, prog: number): void;
+    recurseApplyBroadcast(newval: any, acval: any, parentval: any, path: string, version: number, queryPath?: string): boolean;
     broadcastValue(path: string, val: any, queryPath: string): void;
     broadcastChildAdded(path: string, child: string, val: any, queryPath: string, prevChildName?: string): void;
     broadcastChildChanged(path: string, child: string, val: any, queryPath: string, prevChildName?: string): void;
     broadcastChildMoved(path: string, child: string, val: any, queryPath: string, prevChildName?: string): void;
     broadcastChildRemoved(path: string, child: string, val: any, queryPath: string): void;
     broadcast(path: string, type: string, snapProvider: () => RDb3Snap, prevChildName?: string): void;
-    static create(conf: RDb3Conf): RDb3Root;
+    static create(conf: RDb3Conf): any;
 }
 export declare class Subscription {
     root: RDb3Root;
