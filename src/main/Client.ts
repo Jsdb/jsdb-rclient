@@ -5,8 +5,6 @@
 
 import {Spi,Api} from 'jsdb';
 
-var lvv = 0;
-
 type BroadcastCb = (sub :Subscription, acpath :string, acval:any)=>void;
 
 export interface Socket {
@@ -106,7 +104,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
 
     receivedValue(msg :any) {
-        dbgIo('Received Value %s for %s : %o', lvv++, msg.p, msg);
+        dbgIo('Received Value v %s for "%s" : %o', msg.n, msg.p, msg);
         this.handleChange(msg.p, msg.v, msg.n);
         if (msg.q) {
             var val = msg.v;
@@ -123,7 +121,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     receivedQueryExit(msg :any) {
-        dbgIo('Received QueryExit for %s : %o', msg.q, msg);
+        dbgIo('Received QueryExit v %s for "%s" : %o', msg.n, msg.q, msg);
         var qdef = this.queries[msg.q];
         if (!qdef) return;
         this.handleQueryChange(msg.q, msg.p, null, msg.n);
