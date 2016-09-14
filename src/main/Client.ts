@@ -210,7 +210,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             var leaf = Utils.leafPath(path);
             var lst = ch.pop();
             if (lst) {
-                delete lst[leaf];
+                //delete lst[leaf];
             }
         }
     }
@@ -335,9 +335,12 @@ export class RDb3Root implements Spi.DbTreeRoot {
                         markIncomplete(pre);
                     }
                     acval[k] = pre;
-                    changed = true;
-                    this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k, version);
-                    this.broadcastChildAdded(path, k, acval[k], queryPath, findPreviousKey(acval, k));
+                    if (this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k, version)) {
+                        changed = true;
+                        this.broadcastChildAdded(path, k, acval[k], queryPath, findPreviousKey(acval, k));
+                    } else {
+                        delete acval[k];
+                    }
                 } else {
                     // Maybe child changed
                     var prepre = findPreviousKey(acval, k);
@@ -394,7 +397,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
                         // keep "known missings", to avoid broadcasting this event over and over if it happens
                         parentval[leaf] = KNOWN_NULL;
                         this.broadcastValue(path, KNOWN_NULL, queryPath);
-                        return true;
+                        return !!acval;
                     }
                 }
             } else if (parentval[leaf] != newval) {

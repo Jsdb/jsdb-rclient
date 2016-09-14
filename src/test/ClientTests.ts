@@ -507,7 +507,47 @@ describe('RDb3Client >', () => {
 
                 assert("Received new child_addeds", adds, is.array.withLength(2));
                 assert("Received new child_removed", rems, is.array.withLength(2));
+
+                adds = [];
+                rems = [];
+
+                root.handleChange('/list', {}, dummyProg++);
+
+                assert("Received no child_addeds on delete", adds, is.array.withLength(0));
+                assert("Received all child_removeds", rems, is.array.withLength(4));
             });
+
+            it('Should not send child added on empty', () => {
+                var obj = { a: {val: 1}, b: {val: 2}, c: {val: 3}, d: {val: 4} };
+                root.handleChange('/list', obj, dummyProg++);
+
+                var ref = root.getUrl('/list');
+                var adds: Client.RDb3Snap[] = [];
+                var rems: Client.RDb3Snap[] = [];
+
+                ref.on('child_added', (data) => adds.push(data));
+                ref.on('child_removed', (data) => rems.push(data));
+
+                assert("Received initial child_addeds", adds, is.array.withLength(4));
+
+                var refs :Tsdb.Spi.DbTree[] = [];
+                for (var k in obj) {
+                    root.getUrl('/list/' + k + '/val').on('value', (ds)=>{});
+                }
+
+                adds = [];
+
+                for (var k in obj) {
+                    root.handleChange('/list/' + k, null, dummyProg++);
+                }
+                for (var k in obj) {
+                    root.handleChange('/list/' + k + '/val', null, dummyProg++);
+                }
+
+                assert("Received no child_addeds on delete", adds, is.array.withLength(0));
+                assert("Received all child_removeds", rems, is.array.withLength(4));
+            });
+
 
             /*
 			it('Should send child_moved',()=>{
