@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160912_190342_master_1.0.0_8e7cbcd
+ * TSDB remote client 20160914_024018_master_1.0.0_f5e6572
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,7 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160912_190342_master_1.0.0_8e7cbcd';
+    exports.VERSION = '20160914_024018_master_1.0.0_f5e6572';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -205,7 +205,6 @@ var __extends = (this && this.__extends) || function (d, b) {
                 var leaf = Utils.leafPath(path);
                 var lst = ch.pop();
                 if (lst) {
-                    delete lst[leaf];
                 }
             }
         };
@@ -324,9 +323,13 @@ var __extends = (this && this.__extends) || function (d, b) {
                             markIncomplete(pre);
                         }
                         acval[k] = pre;
-                        changed = true;
-                        this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k, version);
-                        this.broadcastChildAdded(path, k, acval[k], queryPath, findPreviousKey(acval, k));
+                        if (this.recurseApplyBroadcast(newc, pre, acval, path + '/' + k, version)) {
+                            changed = true;
+                            this.broadcastChildAdded(path, k, acval[k], queryPath, findPreviousKey(acval, k));
+                        }
+                        else {
+                            delete acval[k];
+                        }
                     }
                     else {
                         // Maybe child changed
@@ -388,7 +391,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                             // keep "known missings", to avoid broadcasting this event over and over if it happens
                             parentval[leaf] = KNOWN_NULL;
                             this.broadcastValue(path, KNOWN_NULL, queryPath);
-                            return true;
+                            return !!acval;
                         }
                     }
                 }

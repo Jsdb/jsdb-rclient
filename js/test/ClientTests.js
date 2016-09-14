@@ -406,6 +406,34 @@ describe('RDb3Client >', function () {
                 root.handleChange('/list', { a: 1, c: 3, e: 5, f: 6 }, dummyProg++);
                 tsmatchers_1.assert("Received new child_addeds", adds, tsmatchers_1.is.array.withLength(2));
                 tsmatchers_1.assert("Received new child_removed", rems, tsmatchers_1.is.array.withLength(2));
+                adds = [];
+                rems = [];
+                root.handleChange('/list', {}, dummyProg++);
+                tsmatchers_1.assert("Received no child_addeds on delete", adds, tsmatchers_1.is.array.withLength(0));
+                tsmatchers_1.assert("Received all child_removeds", rems, tsmatchers_1.is.array.withLength(4));
+            });
+            it('Should not send child added on empty', function () {
+                var obj = { a: { val: 1 }, b: { val: 2 }, c: { val: 3 }, d: { val: 4 } };
+                root.handleChange('/list', obj, dummyProg++);
+                var ref = root.getUrl('/list');
+                var adds = [];
+                var rems = [];
+                ref.on('child_added', function (data) { return adds.push(data); });
+                ref.on('child_removed', function (data) { return rems.push(data); });
+                tsmatchers_1.assert("Received initial child_addeds", adds, tsmatchers_1.is.array.withLength(4));
+                var refs = [];
+                for (var k in obj) {
+                    root.getUrl('/list/' + k + '/val').on('value', function (ds) { });
+                }
+                adds = [];
+                for (var k in obj) {
+                    root.handleChange('/list/' + k, null, dummyProg++);
+                }
+                for (var k in obj) {
+                    root.handleChange('/list/' + k + '/val', null, dummyProg++);
+                }
+                tsmatchers_1.assert("Received no child_addeds on delete", adds, tsmatchers_1.is.array.withLength(0));
+                tsmatchers_1.assert("Received all child_removeds", rems, tsmatchers_1.is.array.withLength(4));
             });
             /*
             it('Should send child_moved',()=>{
