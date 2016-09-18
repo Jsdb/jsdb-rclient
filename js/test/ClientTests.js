@@ -1,12 +1,14 @@
 "use strict";
-//Debug.enable('tsdb:*');
+var Debug = require('debug');
+Debug.enable('tsdb:*');
 var Client = require('../main/Client');
 var SocketIO = require('socket.io');
 var SocketIOClient = require('socket.io-client');
 var tsmatchers_1 = require('tsmatchers');
+var tsMatchers_1 = require('tsmatchers/js/main/tsMatchers');
 var dummyProg = 1;
 var root;
-describe('RDb3Client >', function () {
+describe.only('RDb3Client >', function () {
     describe('Local data >', function () {
         beforeEach(function () {
             root = new Client.RDb3Root(null, 'http://ciao/');
@@ -330,6 +332,9 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
                 tsmatchers_1.assert("Snapshot is non existing", snap.exists(), true);
             });
+        });
+        describe('Local cache >', function () {
+            // TODO local cache 
         });
         describe('Child diff events >', function () {
             it('Should send one child_added from empty', function () {
@@ -666,13 +671,85 @@ describe('RDb3Client >', function () {
             tsmatchers_1.assert("Root value unchanged", trval, null);
         });
     });
+    function checkEvents(conn, events, anyOrder) {
+        if (anyOrder === void 0) { anyOrder = false; }
+        var ret = [];
+        var cbs = {};
+        var inerror = false;
+        var cp = new Promise(function (res, err) {
+            var evtIds = {};
+            for (var i = 0; i < events.length; i++) {
+                evtIds[events[i].event] = true;
+            }
+            var acevt = 0;
+            var _loop_1 = function(k) {
+                cb = function (obj) {
+                    try {
+                        ret.push({ event: k, match: obj, answer: null });
+                        tsmatchers_1.assert("Got too many events", events, tsmatchers_1.is.not.array.withLength(0));
+                        if (anyOrder) {
+                            var found = false;
+                            var match = null;
+                            for (var i = 0; i < events.length; i++) {
+                                var acevobj = events[i];
+                                if (acevobj.event != k)
+                                    continue;
+                                match = tsMatchers_1.matcherOrEquals(acevobj.match);
+                                if (match.matches(obj)) {
+                                    events.splice(i, 1);
+                                    found = true;
+                                    if (acevobj.answer) {
+                                        conn.emit.apply(conn, acevobj.answer);
+                                    }
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                tsmatchers_1.assert("There is a matching event", obj, match);
+                            }
+                        }
+                        else {
+                            var acevobj = events.shift();
+                            tsmatchers_1.assert("Checking event " + (acevt++) + " of type " + acevobj.event, obj, acevobj.match);
+                            if (acevobj.answer) {
+                                conn.emit.apply(conn, acevobj.answer);
+                            }
+                        }
+                        if (events.length == 0)
+                            res(ret);
+                    }
+                    catch (e) {
+                        console.log("Received events", ret);
+                        inerror = true;
+                        err(e);
+                    }
+                };
+                conn.on(k, cb);
+                cbs[k] = cb;
+            };
+            var cb;
+            for (var k in evtIds) {
+                _loop_1(k);
+            }
+        });
+        cp.stop = function () {
+            for (var k in cbs) {
+                conn.removeListener(k, cbs[k]);
+            }
+            tsmatchers_1.assert("Previous error while checking events", inerror, false);
+        };
+        return cp;
+    }
     describe('E2E >', function () {
+        var sockserver;
         var ssock;
         var csock;
         beforeEach(function (done) {
-            if (ssock)
-                ssock.close();
-            ssock = SocketIO.listen(5000);
+            if (sockserver) {
+                sockserver.close();
+                ssock = null;
+            }
+            sockserver = SocketIO.listen(5000);
             if (csock) {
                 csock.removeAllListeners();
                 csock.close();
@@ -683,9 +760,44 @@ describe('RDb3Client >', function () {
             };
             csock = SocketIOClient.connect('http://0.0.0.0:5000', socketOptions);
             root = new Client.RDb3Root(csock, 'http://ciao/');
-            root.whenReady().then(function () { return done(); });
+            root.whenReady().then(function () {
+                done();
+            });
+            sockserver.on('connection', function (sock) {
+                if (!ssock)
+                    ssock = sock;
+                sock.emit('aa');
+            });
+        });
+        it('Should not send immediate sp-up pairs', function () {
+            var ref = root.getUrl('/users/u1');
+            var cep = checkEvents(ssock, [
+                {
+                    event: 'sp',
+                    match: '/users/u1',
+                    answer: ['v', { p: '/users/u1', v: { name: 'Simone', surname: 'Gianni' } }]
+                }
+            ]);
+            ref.on('value', function (ds) { });
+            return cep.then(function () {
+                // TODO wait for the value event to actually arrive
+                return wait(500);
+            }).then(function () {
+                var sub = root.getUrl('/users/u1/name');
+                return new Promise(function (res) {
+                    sub.once('value', function (ds) { res(ds); });
+                });
+            }).then(function (ds) {
+                tsmatchers_1.assert("Returned right value", ds.val(), 'Simone');
+                cep.stop();
+            });
         });
     });
 });
+function wait(to) {
+    return new Promise(function (res, rej) {
+        setTimeout(function () { return res(null); }, to);
+    });
+}
 
 //# sourceMappingURL=ClientTests.js.map

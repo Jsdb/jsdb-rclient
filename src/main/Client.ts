@@ -183,7 +183,6 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     unsubscribe(path :string) {
-        this.sendUnsubscribe(path);
         delete this.subscriptions[path];
         // TODO what is below is suboptimal
         /*
@@ -484,6 +483,9 @@ export class Subscription {
 
     cbs: Handler[] = [];
 
+    private sentSubscribe = false;
+    private needSubscribe = false;
+
     add(cb: Handler) {
         dbgEvt("Adding handler %s from %s", cb._intid, this.path);
         if (this.cbs.length == 0) this.subscribe();
@@ -498,12 +500,23 @@ export class Subscription {
 
     subscribe() {
         dbgEvt("Subscribing to %s", this.path);
-        this.root.sendSubscribe(this.path);
+        this.needSubscribe = true;
+        nextTick(()=>{
+            dbgEvt("Subscribe to %s not cancelled", this.path);
+            if (this.needSubscribe) {
+                this.root.sendSubscribe(this.path);
+                this.sentSubscribe = true;
+            }
+        });
     }
 
     unsubscribe() {
         dbgEvt("Unsubscribing to %s", this.path);
+        this.needSubscribe = false;
         this.root.unsubscribe(this.path);
+        if (this.sentSubscribe) {
+            this.root.sendUnsubscribe(this.path);
+        }
     }
 
     findByType(evtype :string) :Handler[] {
@@ -1032,3 +1045,26 @@ export class QuerySubscription extends Subscription {
         };
     }
 }
+
+
+// Quick polyfill for nextTick
+
+var nextTick = (function () {
+	// Node.js
+	if ((typeof process === 'object') && process && (typeof process.nextTick === 'function')) {
+		return process.nextTick;
+	}
+
+	// W3C Draft
+	// http://dvcs.w3.org/hg/webperf/raw-file/tip/specs/setImmediate/Overview.html
+	if (typeof setImmediate === 'function') {
+		return (cb :Function) => { setImmediate(cb); };
+	}
+
+	// Wide available standard
+	if ((typeof setTimeout === 'function') || (typeof setTimeout === 'object')) {
+		return (cb :Function) => { setTimeout(cb, 0); };
+	}
+
+	return null;
+}());

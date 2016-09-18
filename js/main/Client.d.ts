@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160914_024018_master_1.0.0_f5e6572
+ * TSDB remote client 20160919_002130_master_1.0.0_ddce497
  */
 import { Spi, Api } from 'jsdb';
 export interface Socket {
@@ -56,6 +56,8 @@ export declare class Subscription {
     path: string;
     constructor(root: RDb3Root, path: string);
     cbs: Handler[];
+    private sentSubscribe;
+    private needSubscribe;
     add(cb: Handler): void;
     remove(cb: Handler): void;
     subscribe(): void;

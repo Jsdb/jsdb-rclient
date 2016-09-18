@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160914_024018_master_1.0.0_f5e6572
+ * TSDB remote client 20160919_002130_master_1.0.0_ddce497
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,7 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160914_024018_master_1.0.0_f5e6572';
+    exports.VERSION = '20160919_002130_master_1.0.0_ddce497';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -177,7 +177,6 @@ var __extends = (this && this.__extends) || function (d, b) {
             return sub;
         };
         RDb3Root.prototype.unsubscribe = function (path) {
-            this.sendUnsubscribe(path);
             delete this.subscriptions[path];
             // TODO what is below is suboptimal
             /*
@@ -473,6 +472,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.root = root;
             this.path = path;
             this.cbs = [];
+            this.sentSubscribe = false;
+            this.needSubscribe = false;
         }
         Subscription.prototype.add = function (cb) {
             dbgEvt("Adding handler %s from %s", cb._intid, this.path);
@@ -487,12 +488,24 @@ var __extends = (this && this.__extends) || function (d, b) {
                 this.unsubscribe();
         };
         Subscription.prototype.subscribe = function () {
+            var _this = this;
             dbgEvt("Subscribing to %s", this.path);
-            this.root.sendSubscribe(this.path);
+            this.needSubscribe = true;
+            nextTick(function () {
+                dbgEvt("Subscribe to %s not cancelled", _this.path);
+                if (_this.needSubscribe) {
+                    _this.root.sendSubscribe(_this.path);
+                    _this.sentSubscribe = true;
+                }
+            });
         };
         Subscription.prototype.unsubscribe = function () {
             dbgEvt("Unsubscribing to %s", this.path);
+            this.needSubscribe = false;
             this.root.unsubscribe(this.path);
+            if (this.sentSubscribe) {
+                this.root.sendUnsubscribe(this.path);
+            }
         };
         Subscription.prototype.findByType = function (evtype) {
             return this.cbs.filter(function (ocb) { return ocb.eventType == evtype; });
@@ -997,6 +1010,23 @@ var __extends = (this && this.__extends) || function (d, b) {
         return QuerySubscription;
     }(Subscription));
     exports.QuerySubscription = QuerySubscription;
+    // Quick polyfill for nextTick
+    var nextTick = (function () {
+        // Node.js
+        if ((typeof process === 'object') && process && (typeof process.nextTick === 'function')) {
+            return process.nextTick;
+        }
+        // W3C Draft
+        // http://dvcs.w3.org/hg/webperf/raw-file/tip/specs/setImmediate/Overview.html
+        if (typeof setImmediate === 'function') {
+            return function (cb) { setImmediate(cb); };
+        }
+        // Wide available standard
+        if ((typeof setTimeout === 'function') || (typeof setTimeout === 'object')) {
+            return function (cb) { setTimeout(cb, 0); };
+        }
+        return null;
+    }());
 });
 
 //# sourceMappingURL=Client.js.map

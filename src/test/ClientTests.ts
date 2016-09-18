@@ -1,12 +1,13 @@
 import * as Debug from 'debug';
 
-//Debug.enable('tsdb:*');
+Debug.enable('tsdb:*');
 
 import * as Client from '../main/Client';
 import * as SocketIO from 'socket.io';
 import * as SocketIOClient from 'socket.io-client';
 
 import {assert, is} from 'tsmatchers';
+import {Matcher,matcherOrEquals} from 'tsmatchers/js/main/tsMatchers';
 
 interface TestDb3Root {
     data: any;
@@ -16,7 +17,7 @@ var dummyProg = 1;
 
 var root: Client.RDb3Root & TestDb3Root;
 
-describe('RDb3Client >', () => {
+describe.only('RDb3Client >', () => {
     describe('Local data >', () => {
 
         beforeEach(function () {
@@ -409,6 +410,10 @@ describe('RDb3Client >', () => {
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is non existing", snap.exists(), true);
             });
+        });
+
+        describe('Local cache >', ()=>{
+            // TODO local cache 
         });
 
         describe('Child diff events >', () => {
@@ -876,12 +881,96 @@ describe('RDb3Client >', () => {
         });
     });
 
+    interface SocketEvent {
+        event :string;
+        match :any;
+        answer? :any[];
+    }
+
+    interface CheckPromise<T> extends Promise<T> {
+        stop();
+    }
+
+    interface Socket {
+        id :string;
+        on(event :string, cb :(...args :any[])=>any) :any;
+        emit(event :string, ...args :any[]) :any;
+        removeListener(event :string, cb :(...args :any[])=>any) :any;
+        removeAllListeners() :void;
+    }
+
+    function checkEvents(conn :Socket, events :SocketEvent[], anyOrder = false) :CheckPromise<SocketEvent[]> {
+        var ret :SocketEvent[] = [];
+        var cbs = {};
+        var inerror = false;
+        var cp = <CheckPromise<SocketEvent[]>>new Promise<SocketEvent[]>((res,err) => {
+            var evtIds :{[index:string]:boolean} = {};
+            for (var i = 0; i < events.length; i++) {
+                evtIds[events[i].event] = true;
+            }
+            var acevt = 0;
+            for (let k in evtIds) {
+                var cb = (obj) => {
+                    try {
+                        ret.push({event:k, match: obj, answer: null});
+                        assert("Got too many events", events, is.not.array.withLength(0));
+                        if (anyOrder) {
+                            var found = false;
+                            var match :Matcher<any> = null;
+                            for (var i = 0; i < events.length; i++) {
+                                var acevobj = events[i];
+                                if (acevobj.event != k) continue;
+                                match = matcherOrEquals(acevobj.match);
+                                if (match.matches(obj)) {
+                                    events.splice(i,1);
+                                    found = true;
+                                    if (acevobj.answer) {
+                                        conn.emit.apply(conn, acevobj.answer);
+                                    }
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                assert("There is a matching event", obj, match);
+                            }
+                        } else {
+                            var acevobj = events.shift();
+                            assert("Checking event " + (acevt++) + " of type " + acevobj.event, obj, acevobj.match);
+                            if (acevobj.answer) {
+                                conn.emit.apply(conn, acevobj.answer);
+                            }
+                        }
+                        if (events.length == 0) res(ret);
+                    } catch (e) {
+                        console.log("Received events", ret);
+                        inerror = true;
+                        err(e);
+                    }
+                };
+                conn.on(k, cb);
+                cbs[k] = cb;
+            }
+        });
+        cp.stop = ()=>{
+            for (var k in cbs) {
+                conn.removeListener(k, cbs[k]);
+            }
+            assert("Previous error while checking events", inerror, false);
+        };
+        return cp;
+    }
+
+
     describe('E2E >', ()=>{
-        var ssock :SocketIO.Server;
+        var sockserver :SocketIO.Server;
+        var ssock :SocketIO.Socket;
         var csock :SocketIOClient.Socket;
         beforeEach(function (done) {
-            if (ssock) ssock.close();
-            ssock = SocketIO.listen(5000);
+            if (sockserver) {
+                sockserver.close();
+                ssock = null;
+            }
+            sockserver = SocketIO.listen(5000);
             if (csock) {
                 csock.removeAllListeners();
                 csock.close();
@@ -893,9 +982,46 @@ describe('RDb3Client >', () => {
             csock = SocketIOClient.connect('http://0.0.0.0:5000', socketOptions);
 
             root = <any>new Client.RDb3Root(csock, 'http://ciao/');
-            root.whenReady().then(()=>done());
+            root.whenReady().then(()=>{
+                done();
+            });
+
+            sockserver.on('connection', (sock)=>{
+                if (!ssock) ssock = sock;
+                sock.emit('aa');
+            });
         });
+
+        it('Should not send immediate sp-up pairs', ()=>{
+            var ref = root.getUrl('/users/u1');
+            var cep = checkEvents(ssock, [
+                {
+                    event: 'sp',
+                    match: '/users/u1',
+                    answer: ['v',{p:'/users/u1', v:{name:'Simone',surname:'Gianni'}}]
+                }
+            ]);
+            ref.on('value', (ds)=>{});
+            return cep.then(()=>{
+                // TODO wait for the value event to actually arrive
+                return wait(500);
+            }).then(()=>{
+                var sub = root.getUrl('/users/u1/name');
+                return new Promise<Client.RDb3Snap>((res)=>{
+                    sub.once('value', (ds)=>{res(ds)});
+                });
+            }).then((ds)=>{
+                assert("Returned right value", ds.val(), 'Simone');
+                cep.stop();
+            });
+        })
 
         
     });
 });
+
+function wait(to :number) :Promise<any> {
+    return new Promise<any>((res,rej)=>{
+        setTimeout(()=>res(null), to);
+    });
+}
