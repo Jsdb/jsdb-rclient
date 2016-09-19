@@ -54,7 +54,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     private subscriptions :{[index:string]:Subscription} = {};
-    private data :any;
+    data :any;
     private queries :{[index:string]:QuerySubscription} = {};
 
     private doneProm :Promise<any> = null;
@@ -63,6 +63,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     nextProg() :number {
         this.writeProg++;
+        return this.writeProg;
+    }
+
+    actualProg() :number {
         return this.writeProg;
     }
 
@@ -182,8 +186,39 @@ export class RDb3Root implements Spi.DbTreeRoot {
         return sub;
     }
 
-    unsubscribe(path :string) {
+    unsubscribe(path :string, prog :number) {
         delete this.subscriptions[path];
+
+        var sp = splitUrl(path);
+        var ch = findChain(sp, this.data);
+        var leaf = Utils.leafPath(path);
+        var lst = ch[ch.length - 1];
+
+        // When path X is unsubscribed it :
+        // .. Check if up the tree there is a subscription protecting this path
+        //if (this.subscriptions['']) return;
+        var acp = path;
+        while (acp) {
+            if (this.subscriptions[path]) return;
+            acp = Utils.parentPath(acp);
+        }
+        // .. Recurses down, removing any value that is not protected by a subscriptions
+        if (lst) {
+            this.recursiveClean(path, lst, prog);
+        }
+        // .. Recurses up, remove any key that results in an empty object
+        for (var i = ch.length - 1; i > 0; i--) {
+            var ac = ch[i];
+            var par = ch[i-1];
+            var inpname = sp[i];
+            if (typeof(ac) === 'object' && Utils.isEmpty(ac)) {
+                dbgRoot("Recursing up, deleting %s : %s", inpname, par[inpname]);
+                delete par[inpname];
+            }
+        }
+
+
+
         // TODO what is below is suboptimal
         /*
         Should not remove data, chldren of the path being unsubscribed, if they have their own listener.
@@ -200,8 +235,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
           uns : /list/a ---> should not remove anything, cause /list/a is being listened by /list 
           uns : /list -> now it can delete everything
         */ 
+        /*
         if (path == '') {
             // Special case for root
+            dbgRoot("Clearing all data, unsubscribed from root");
             this.data = {};
             markIncomplete(this.data);
         } else {
@@ -209,9 +246,32 @@ export class RDb3Root implements Spi.DbTreeRoot {
             var leaf = Utils.leafPath(path);
             var lst = ch.pop();
             if (lst) {
-                //delete lst[leaf];
+                delete lst[leaf];
             }
         }
+        */
+    }
+
+    private recursiveClean(path :string, val :any, prog :number) {
+        if (typeof(val) !== 'object') return false;
+        if (val === KNOWN_NULL) return false;
+        var atlo = false;
+        var versions = getVersions(val);
+        for (var k in val) {
+            if (versions[k] && versions[k] > prog) continue;
+            var subp = path + '/' + k;
+            if (this.subscriptions[subp]) {
+                atlo = true;
+                continue;
+            }
+            if (!this.recursiveClean(subp, val[k], prog)) {
+                dbgRoot("Recursing down, invalidating %s", subp);
+                delete val[k];
+            } else {
+                atlo = true;
+            }
+        }
+        return atlo;
     }
 
     subscribeQuery(query :QuerySubscription) {
@@ -244,6 +304,31 @@ export class RDb3Root implements Spi.DbTreeRoot {
         }
 
         this.recurseApplyBroadcast(nv, this.data, null, '', prog);
+
+        // Special case for root
+        if (val == null && path == '') {
+            this.data = {};
+        }
+
+        /*
+        if (val == null) {
+            // Special case for root
+            if (path == '') {
+                this.data = {};
+            } else {
+                var ch = findChain(sp, this.data);
+                // .. Recurses up, remove any key that results in an empty object
+                for (var i = ch.length - 1; i > 0; i--) {
+                    var ac = ch[i];
+                    var par = ch[i-1];
+                    var inpname = sp[i];
+                    if (typeof(ac) === 'object' && Utils.isEmpty(ac)) {
+                        delete par[inpname];
+                    }
+                }
+            }
+        }
+        */
     }
 
     handleQueryChange(id :string, path :string, val :any, prog :number) {
@@ -312,6 +397,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
                 var pre = acval[k];
                 var prever = acversions[k];
+                dbgRoot("%s comparing prever %s->%s : %s->%s", path+'/'+k, prever, version,pre,newc);
                 if (prever && prever > version) continue;
                 if (!isIncomplete(newc)) {
                     acversions[k] = version;
@@ -376,6 +462,15 @@ export class RDb3Root implements Spi.DbTreeRoot {
             if ((changed && !newval.$l && !isIncomplete(acval)) || newval.$d) {
                 this.broadcastValue(path, acval, queryPath);
             }
+            for (var k in acval) {
+                if (acval[k] !== KNOWN_NULL) return changed;
+                if (this.subscriptions[path+'/'+k]) return changed;
+            }
+            if (parentval) {
+                delete parentval[leaf];
+            } else {
+                this.data = {};
+            }
             return changed;
         } else {
             if (!parentval || !leaf) {
@@ -399,15 +494,9 @@ export class RDb3Root implements Spi.DbTreeRoot {
                         return !!acval;
                     }
                 }
+                // TODO propagate the nullification downwards to raise events on children, if any
             } else if (parentval[leaf] != newval) {
-                if (newval === null) {
-                    parentval[leaf] = KNOWN_NULL;
-                    //delete parentval[leaf];
-                    // TODO we should probably propagate the nullification downwards to trigger value changed on who's listening below us
-                    // Except when in a query, removal from a query deos not mean the element does not exist anymore
-                } else {
-                    parentval[leaf] = newval;
-                }
+                parentval[leaf] = newval;
                 this.broadcastValue(path, newval, queryPath);
                 return true;
             }
@@ -502,8 +591,9 @@ export class Subscription {
         dbgEvt("Subscribing to %s", this.path);
         this.needSubscribe = true;
         nextTick(()=>{
-            dbgEvt("Subscribe to %s not cancelled", this.path);
+            if (this.sentSubscribe) return;
             if (this.needSubscribe) {
+                dbgEvt("Subscribe to %s not cancelled", this.path);
                 this.root.sendSubscribe(this.path);
                 this.sentSubscribe = true;
             }
@@ -512,11 +602,16 @@ export class Subscription {
 
     unsubscribe() {
         dbgEvt("Unsubscribing to %s", this.path);
+        var prog = this.root.actualProg();
         this.needSubscribe = false;
-        this.root.unsubscribe(this.path);
-        if (this.sentSubscribe) {
-            this.root.sendUnsubscribe(this.path);
-        }
+        nextTick(()=>{
+            if (this.needSubscribe) return;
+            this.root.unsubscribe(this.path, prog);
+            if (this.sentSubscribe) {
+                this.root.sendUnsubscribe(this.path);
+                this.sentSubscribe = false;
+            }
+        });
     }
 
     findByType(evtype :string) :Handler[] {
@@ -637,7 +732,9 @@ export class RDb3Snap implements Spi.DbTreeSnap {
         private url: string,
         reclone = true
     ) {
-        if (data != null && typeof (data) !== undefined && reclone) {
+        if (data === KNOWN_NULL) {
+            this.data = null;
+        } else if (data != null && typeof (data) !== undefined && reclone) {
             var str = JSON.stringify(data);
             if (str === undefined || str === 'undefined') {
                 this.data = undefined;
@@ -735,6 +832,13 @@ namespace Utils {
         //if (ret.length == 0) return null;
         return ret;
     }
+
+    export function isEmpty(obj :any) :boolean {
+        for (var k in obj) {
+            return false;
+        }
+        return true;
+    }
 }
 
 
@@ -801,10 +905,23 @@ function getVersions(obj :any) :any {
 }
 
 
-var KNOWN_NULL = {
-    toJSON : ()=><any>undefined,
-    $i :false
-}
+/*
+export var KNOWN_NULL = {};
+Object.defineProperty(KNOWN_NULL, 'toJSON', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>()=><any>undefined}); //, value:()=><any>undefined});
+Object.defineProperty(KNOWN_NULL, '$i', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>false}); // writable:false, value:false});
+*/
+
+export var KNOWN_NULL = {};
+Object.defineProperty(KNOWN_NULL, 'toJSON', {enumerable:true, configurable:false, writable:false, value:()=><any>undefined});
+Object.defineProperty(KNOWN_NULL, '$i', {enumerable:true, configurable:false, writable:false, value:false});
+
+/*
+export var KNOWN_NULL = {
+    toJSON: ()=><any>undefined,
+    $i: false
+};
+*/
+
 
 export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
 
@@ -941,6 +1058,8 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     * Writes data to this DbTree location.
     */
     set(value: any, onComplete?: (error: any) => void): void {
+        // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
+        this.root.subscribe(this.url);
         var prog = this.root.nextProg();
         this.root.send('s', this.url, value, prog, (ack:string)=>{
             if (onComplete) {
@@ -958,6 +1077,8 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     * Writes the enumerated children to this DbTree location.
     */
     update(value: any, onComplete?: (error: any) => void): void {
+        // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
+        this.root.subscribe(this.url);
         var prog = this.root.nextProg();
         this.root.send('m', this.url, value, prog, (ack:string)=>{
             if (onComplete) {

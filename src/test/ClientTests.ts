@@ -17,7 +17,7 @@ var dummyProg = 1;
 
 var root: Client.RDb3Root & TestDb3Root;
 
-describe.only('RDb3Client >', () => {
+describe('RDb3Client >', () => {
     describe('Local data >', () => {
 
         beforeEach(function () {
@@ -111,6 +111,17 @@ describe.only('RDb3Client >', () => {
                     assert("Should be the first version", root.data['node'], is.object.matching({
                         sub1: 'ciao',
                         sub2: 'altro'
+                    }));
+                });
+
+                it('Should not override from root', ()=>{
+                    root.handleChange('/withProps', { wp1: {str:'ciao'}, wp2: 'altro' }, 3);
+                    root.handleChange('/withProps/wp1/str', 'pippo', 34);
+                    root.handleChange('', {withProps:{ wp1: {str:'ciao'}, wp2: 'altro' }}, 33);
+
+                    assert("Should be the first version", root.data['withProps'], is.object.matching({
+                        wp1: {str:'pippo'},
+                        wp2: 'altro'
                     }));
                 });
 
@@ -379,13 +390,17 @@ describe.only('RDb3Client >', () => {
 
         describe('Known missing >', ()=>{
             it('Should send a value event for confirmed null, also on second call', () => {
+                root = <any>new Client.RDb3Root(null, 'http://ciao/');
+
                 var ref = root.getUrl('/node');
                 var snap: Client.RDb3Snap;
                 var cb = ref.on('value', (data) => snap = data);
                 root.handleChange('/node', null, dummyProg++);
+                console.log(root.data);
 
-                assert("Received event", snap, is.truthy);
-                assert("Snapshot is non existing", snap.exists(), false);
+                assert("Received first event", snap, is.truthy);
+                console.log(snap.val());
+                assert("First snapshot is non existing", snap.exists(), false);
 
                 snap = null;
 
@@ -393,7 +408,7 @@ describe.only('RDb3Client >', () => {
                 ref.off('value', cb);
 
                 assert("Received second value event", snap, is.truthy);
-                assert("Snapshot is non existing", snap.exists(), false);
+                assert("Second snapshot is non existing", snap.exists(), false);
             });
 
             it('Should properly replace a known missing with a new value', () => {
@@ -413,7 +428,62 @@ describe.only('RDb3Client >', () => {
         });
 
         describe('Local cache >', ()=>{
-            // TODO local cache 
+            it('Should not delete children protected by parent', ()=>{
+                root.handleChange('/node', {a:1,b:2,c:3}, dummyProg++);
+                root.subscribe('/node');
+                root.subscribe('/node/a');
+                assert("Value should be there", root.getValue('/node/a'), 1);
+
+                root.unsubscribe('/node/a', dummyProg);
+                assert("Value should still be there", root.getValue('/node/a'), 1);
+
+                root.unsubscribe('/node', dummyProg);
+                assert("Value should not be there anymore", root.getValue('/node/a'), is.falsey);
+            });
+
+            it('Should not delete siblings on the way', ()=>{
+                root.handleChange('/node', {a:{val:1},b:{val:2},c:{val:3}}, dummyProg++);
+                root.subscribe('/node/a');
+                root.unsubscribe('/node/a', dummyProg);
+                assert("Value should not be there anymore", root.getValue('/node/a'), is.falsey);
+                assert("Sibling should still be there", root.getValue('/node/b'), is.truthy);
+            });
+
+            it('Should clean up parents when setting null on grandchild', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', {a:{val:null}}, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should clean up parents when setting null on child', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', {a:null}, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should clean up parents when setting nullifying all', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should not clean up, but keep know nulls, if there is subscription', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.subscribe('/node');
+                root.handleChange('/node', null, dummyProg++);
+                assert("Data should be with known null", root.data, is.strictly.object.matching({node:is.object}));
+            });
+
+            it('Should clean up parents when setting null only', ()=>{
+                root.handleChange('/node', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should empty data when setting null on root', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
         });
 
         describe('Child diff events >', () => {
@@ -904,10 +974,14 @@ describe.only('RDb3Client >', () => {
         var cbs = {};
         var inerror = false;
         var cp = <CheckPromise<SocketEvent[]>>new Promise<SocketEvent[]>((res,err) => {
-            var evtIds :{[index:string]:boolean} = {};
-            for (var i = 0; i < events.length; i++) {
-                evtIds[events[i].event] = true;
-            }
+            var evtIds :{[index:string]:boolean} = {
+                sp:true,
+                up:true,
+                sq:true,
+                uq:true,
+                s:true,
+                m:true
+            };
             var acevt = 0;
             for (let k in evtIds) {
                 var cb = (obj) => {
@@ -1015,6 +1089,41 @@ describe.only('RDb3Client >', () => {
                 cep.stop();
             });
         })
+
+        it('Should not send immediate up-sp pairs', ()=>{
+            var ref = root.getUrl('/users/u1');
+            var cep = checkEvents(ssock, [
+                {
+                    event: 'sp',
+                    match: '/users/u1',
+                    answer: ['v',{p:'/users/u1', v:{name:'Simone',surname:'Gianni'}}]
+                }
+            ]);
+            var cb = ref.on('value', (ds)=>{});
+            return cep.then(()=>{
+                // TODO wait for the value event to actually arrive
+                return wait(500);
+            }).then(()=>{
+                // Unsubscribe
+                ref.off('value', cb);
+                cb = ref.on('value', (ds)=>{});
+                return wait(500);
+            }).then(()=>{
+                cep.stop();
+                cep = checkEvents(ssock, [
+                    {
+                        event: 'up',
+                        match: '/users/u1'
+                    }
+                ]);
+                ref.off('value', cb);
+                return cep;
+            }).then(()=>{
+                return wait(500);
+            }).then(()=>{
+                cep.stop();
+            });
+        });
 
         
     });
