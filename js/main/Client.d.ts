@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160919_002130_master_1.0.0_ddce497
+ * TSDB remote client 20160919_192747_master_1.0.0_ddf69f0
  */
 import { Spi, Api } from 'jsdb';
 export interface Socket {
@@ -22,6 +22,7 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     private doneProm;
     private writeProg;
     nextProg(): number;
+    actualProg(): number;
     getUrl(url: string): RDb3Tree;
     makeRelative(url: string): string;
     makeAbsolute(url: string): string;
@@ -37,6 +38,7 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     sendUnsubscribeQuery(id: string): void;
     subscribe(path: string): Subscription;
     unsubscribe(path: string): void;
+    private recursiveClean(path, val);
     subscribeQuery(query: QuerySubscription): void;
     unsubscribeQuery(id: string): void;
     getValue(url: string | string[]): any;
@@ -90,6 +92,7 @@ export declare class RDb3Snap implements Spi.DbTreeSnap {
     key(): string;
     ref(): RDb3Tree;
 }
+export declare var KNOWN_NULL: {};
 export declare class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     root: RDb3Root;
     url: string;

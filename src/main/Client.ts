@@ -54,7 +54,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     private subscriptions :{[index:string]:Subscription} = {};
-    data :any;
+    private data :any;
     private queries :{[index:string]:QuerySubscription} = {};
 
     private doneProm :Promise<any> = null;
@@ -186,7 +186,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         return sub;
     }
 
-    unsubscribe(path :string, prog :number) {
+    unsubscribe(path :string) {
         delete this.subscriptions[path];
 
         var sp = splitUrl(path);
@@ -199,24 +199,22 @@ export class RDb3Root implements Spi.DbTreeRoot {
         //if (this.subscriptions['']) return;
         var acp = path;
         while (acp) {
-            if (this.subscriptions[path]) return;
+            if (this.subscriptions[acp]) return;
             acp = Utils.parentPath(acp);
         }
-        // .. Recurses down, removing any value that is not protected by a subscriptions
+        // .. Recurses down, invalidating any value that is not protected by a subscriptions
         if (lst) {
-            this.recursiveClean(path, lst, prog);
+            this.recursiveClean(path, lst);
         }
-        // .. Recurses up, remove any key that results in an empty object
+        // .. Recurses up, invalidate any key that results in an empty object
         for (var i = ch.length - 1; i > 0; i--) {
             var ac = ch[i];
-            var par = ch[i-1];
             var inpname = sp[i];
-            if (typeof(ac) === 'object' && Utils.isEmpty(ac)) {
-                dbgRoot("Recursing up, deleting %s : %s", inpname, par[inpname]);
-                delete par[inpname];
+            if (typeof(ac) === 'object' && ac !== KNOWN_NULL) {
+                dbgRoot("Recursing up, invalidating %s : %s", inpname);
+                markIncomplete(ac);
             }
         }
-
 
 
         // TODO what is below is suboptimal
@@ -252,26 +250,18 @@ export class RDb3Root implements Spi.DbTreeRoot {
         */
     }
 
-    private recursiveClean(path :string, val :any, prog :number) {
-        if (typeof(val) !== 'object') return false;
-        if (val === KNOWN_NULL) return false;
-        var atlo = false;
-        var versions = getVersions(val);
+    private recursiveClean(path :string, val :any) {
+        if (typeof(val) !== 'object') return;
+        if (val === KNOWN_NULL) return;
+        dbgRoot("Recursing down, invalidating %s", path);
+        markIncomplete(val);
         for (var k in val) {
-            if (versions[k] && versions[k] > prog) continue;
             var subp = path + '/' + k;
             if (this.subscriptions[subp]) {
-                atlo = true;
                 continue;
             }
-            if (!this.recursiveClean(subp, val[k], prog)) {
-                dbgRoot("Recursing down, invalidating %s", subp);
-                delete val[k];
-            } else {
-                atlo = true;
-            }
+            this.recursiveClean(subp, val[k]);
         }
-        return atlo;
     }
 
     subscribeQuery(query :QuerySubscription) {
@@ -462,6 +452,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             if ((changed && !newval.$l && !isIncomplete(acval)) || newval.$d) {
                 this.broadcastValue(path, acval, queryPath);
             }
+            /*
             for (var k in acval) {
                 if (acval[k] !== KNOWN_NULL) return changed;
                 if (this.subscriptions[path+'/'+k]) return changed;
@@ -471,6 +462,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             } else {
                 this.data = {};
             }
+            */
             return changed;
         } else {
             if (!parentval || !leaf) {
@@ -606,7 +598,7 @@ export class Subscription {
         this.needSubscribe = false;
         nextTick(()=>{
             if (this.needSubscribe) return;
-            this.root.unsubscribe(this.path, prog);
+            this.root.unsubscribe(this.path);
             if (this.sentSubscribe) {
                 this.root.sendUnsubscribe(this.path);
                 this.sentSubscribe = false;
@@ -882,7 +874,9 @@ function findChain<T>(url: string | string[], from: T, leaf = true, create = fal
 }
 
 function markIncomplete(obj :any) {
-    Object.defineProperty(obj, '$i', {enumerable:false, configurable:true, value:true});
+    if (obj && typeof(obj) === 'object' && !obj['$i']) {
+        Object.defineProperty(obj, '$i', {enumerable:false, configurable:true, value:true});
+    }
 }
 
 function markComplete(obj :any) {
@@ -1059,8 +1053,9 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     */
     set(value: any, onComplete?: (error: any) => void): void {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
-        this.root.subscribe(this.url);
+        //this.root.subscribe(this.url);
         var prog = this.root.nextProg();
+        this.root.handleChange(this.url, value, prog);
         this.root.send('s', this.url, value, prog, (ack:string)=>{
             if (onComplete) {
                 if (ack == 'k') {
@@ -1070,7 +1065,6 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
                 }
             }
         });
-        this.root.handleChange(this.url, value, prog);
     }
 
     /**
@@ -1078,8 +1072,11 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     */
     update(value: any, onComplete?: (error: any) => void): void {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
-        this.root.subscribe(this.url);
+        //this.root.subscribe(this.url);
         var prog = this.root.nextProg();
+        for (var k in value) {
+            this.root.handleChange(this.url + '/' + k, value[k], prog);
+        }
         this.root.send('m', this.url, value, prog, (ack:string)=>{
             if (onComplete) {
                 if (ack == 'k') {
@@ -1089,9 +1086,6 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
                 }
             }
         });
-        for (var k in value) {
-            this.root.handleChange(this.url + '/' + k, value[k], prog);
-        }
     }
 
     /**

@@ -8,7 +8,7 @@ var tsmatchers_1 = require('tsmatchers');
 var tsMatchers_1 = require('tsmatchers/js/main/tsMatchers');
 var dummyProg = 1;
 var root;
-describe.only('RDb3Client >', function () {
+describe('RDb3Client >', function () {
     describe('Local data >', function () {
         beforeEach(function () {
             root = new Client.RDb3Root(null, 'http://ciao/');
@@ -94,6 +94,15 @@ describe.only('RDb3Client >', function () {
                     tsmatchers_1.assert("Should be the first version", root.data['node'], tsmatchers_1.is.object.matching({
                         sub1: 'ciao',
                         sub2: 'altro'
+                    }));
+                });
+                it('Should not override from root', function () {
+                    root.handleChange('/withProps', { wp1: { str: 'ciao' }, wp2: 'altro' }, 3);
+                    root.handleChange('/withProps/wp1/str', 'pippo', 34);
+                    root.handleChange('', { withProps: { wp1: { str: 'ciao' }, wp2: 'altro' } }, 33);
+                    tsmatchers_1.assert("Should be the first version", root.data['withProps'], tsmatchers_1.is.object.matching({
+                        wp1: { str: 'pippo' },
+                        wp2: 'altro'
                     }));
                 });
                 it('Should not override object with previous null', function () {
@@ -308,17 +317,20 @@ describe.only('RDb3Client >', function () {
         });
         describe('Known missing >', function () {
             it('Should send a value event for confirmed null, also on second call', function () {
+                root = new Client.RDb3Root(null, 'http://ciao/');
                 var ref = root.getUrl('/node');
                 var snap;
                 var cb = ref.on('value', function (data) { return snap = data; });
                 root.handleChange('/node', null, dummyProg++);
-                tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
-                tsmatchers_1.assert("Snapshot is non existing", snap.exists(), false);
+                console.log(root.data);
+                tsmatchers_1.assert("Received first event", snap, tsmatchers_1.is.truthy);
+                console.log(snap.val());
+                tsmatchers_1.assert("First snapshot is non existing", snap.exists(), false);
                 snap = null;
                 ref.on('value', function (data) { return snap = data; });
                 ref.off('value', cb);
                 tsmatchers_1.assert("Received second value event", snap, tsmatchers_1.is.truthy);
-                tsmatchers_1.assert("Snapshot is non existing", snap.exists(), false);
+                tsmatchers_1.assert("Second snapshot is non existing", snap.exists(), false);
             });
             it('Should properly replace a known missing with a new value', function () {
                 var ref = root.getUrl('/node');
@@ -334,7 +346,60 @@ describe.only('RDb3Client >', function () {
             });
         });
         describe('Local cache >', function () {
-            // TODO local cache 
+            it('Should not delete children protected by parent', function () {
+                root.handleChange('/node', { a: 1, b: 2, c: 3 }, dummyProg++);
+                root.subscribe('/node');
+                root.subscribe('/node/a');
+                tsmatchers_1.assert("Value should be there", root.getValue('/node/a'), 1);
+                root.unsubscribe('/node/a');
+                tsmatchers_1.assert("Value should still be there and valid", root.getValue('/node'), tsmatchers_1.is.object.matching({ a: 1, $i: tsmatchers_1.is.undefined }));
+                root.unsubscribe('/node');
+                tsmatchers_1.assert("Value should not be there anymore", root.getValue('/node'), tsmatchers_1.is.object.matching({ $i: tsmatchers_1.is.truthy }));
+            });
+            it('Should not delete siblings on the way', function () {
+                root.handleChange('/node', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
+                root.subscribe('/node/a');
+                root.unsubscribe('/node/a');
+                tsmatchers_1.assert("Value should not be valid anymore", root.getValue('/node/a'), tsmatchers_1.is.object.matching({ val: 1, $i: true }));
+                tsmatchers_1.assert("Sibling should still be there", root.getValue('/node/b'), tsmatchers_1.is.object.matching({ val: 2, $i: tsmatchers_1.is.undefined }));
+            });
+            /*
+            it('Should clean up parents when setting null on grandchild', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', {a:{val:null}}, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should clean up parents when setting null on child', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', {a:null}, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should clean up parents when setting nullifying all', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('/node', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+            */
+            it('Should not clean up, but keep know nulls, if there is subscription', function () {
+                root.handleChange('/node', { a: { val: 1 } }, dummyProg++);
+                root.subscribe('/node');
+                root.handleChange('/node', null, dummyProg++);
+                tsmatchers_1.assert("Data should be with known null", root.data, tsmatchers_1.is.strictly.object.matching({ node: tsmatchers_1.is.object }));
+            });
+            /*
+            it('Should clean up parents when setting null only', ()=>{
+                root.handleChange('/node', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+
+            it('Should empty data when setting null on root', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
+                root.handleChange('', null, dummyProg++);
+                assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
+            });
+            */
         });
         describe('Child diff events >', function () {
             it('Should send one child_added from empty', function () {
@@ -677,10 +742,14 @@ describe.only('RDb3Client >', function () {
         var cbs = {};
         var inerror = false;
         var cp = new Promise(function (res, err) {
-            var evtIds = {};
-            for (var i = 0; i < events.length; i++) {
-                evtIds[events[i].event] = true;
-            }
+            var evtIds = {
+                sp: true,
+                up: true,
+                sq: true,
+                uq: true,
+                s: true,
+                m: true
+            };
             var acevt = 0;
             var _loop_1 = function(k) {
                 cb = function (obj) {
@@ -789,6 +858,40 @@ describe.only('RDb3Client >', function () {
                 });
             }).then(function (ds) {
                 tsmatchers_1.assert("Returned right value", ds.val(), 'Simone');
+                cep.stop();
+            });
+        });
+        it('Should not send immediate up-sp pairs', function () {
+            var ref = root.getUrl('/users/u1');
+            var cep = checkEvents(ssock, [
+                {
+                    event: 'sp',
+                    match: '/users/u1',
+                    answer: ['v', { p: '/users/u1', v: { name: 'Simone', surname: 'Gianni' } }]
+                }
+            ]);
+            var cb = ref.on('value', function (ds) { });
+            return cep.then(function () {
+                // TODO wait for the value event to actually arrive
+                return wait(500);
+            }).then(function () {
+                // Unsubscribe
+                ref.off('value', cb);
+                cb = ref.on('value', function (ds) { });
+                return wait(500);
+            }).then(function () {
+                cep.stop();
+                cep = checkEvents(ssock, [
+                    {
+                        event: 'up',
+                        match: '/users/u1'
+                    }
+                ]);
+                ref.off('value', cb);
+                return cep;
+            }).then(function () {
+                return wait(500);
+            }).then(function () {
                 cep.stop();
             });
         });

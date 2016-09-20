@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160919_002130_master_1.0.0_ddce497
+ * TSDB remote client 20160919_192747_master_1.0.0_ddf69f0
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,7 +15,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
-    exports.VERSION = '20160919_002130_master_1.0.0_ddce497';
+    exports.VERSION = '20160919_192747_master_1.0.0_ddf69f0';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -61,6 +61,9 @@ var __extends = (this && this.__extends) || function (d, b) {
         }
         RDb3Root.prototype.nextProg = function () {
             this.writeProg++;
+            return this.writeProg;
+        };
+        RDb3Root.prototype.actualProg = function () {
             return this.writeProg;
         };
         RDb3Root.prototype.getUrl = function (url) {
@@ -178,6 +181,32 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         RDb3Root.prototype.unsubscribe = function (path) {
             delete this.subscriptions[path];
+            var sp = splitUrl(path);
+            var ch = findChain(sp, this.data);
+            var leaf = Utils.leafPath(path);
+            var lst = ch[ch.length - 1];
+            // When path X is unsubscribed it :
+            // .. Check if up the tree there is a subscription protecting this path
+            //if (this.subscriptions['']) return;
+            var acp = path;
+            while (acp) {
+                if (this.subscriptions[acp])
+                    return;
+                acp = Utils.parentPath(acp);
+            }
+            // .. Recurses down, invalidating any value that is not protected by a subscriptions
+            if (lst) {
+                this.recursiveClean(path, lst);
+            }
+            // .. Recurses up, invalidate any key that results in an empty object
+            for (var i = ch.length - 1; i > 0; i--) {
+                var ac = ch[i];
+                var inpname = sp[i];
+                if (typeof (ac) === 'object' && ac !== exports.KNOWN_NULL) {
+                    dbgRoot("Recursing up, invalidating %s : %s", inpname);
+                    markIncomplete(ac);
+                }
+            }
             // TODO what is below is suboptimal
             /*
             Should not remove data, chldren of the path being unsubscribed, if they have their own listener.
@@ -194,17 +223,35 @@ var __extends = (this && this.__extends) || function (d, b) {
               uns : /list/a ---> should not remove anything, cause /list/a is being listened by /list
               uns : /list -> now it can delete everything
             */
+            /*
             if (path == '') {
                 // Special case for root
+                dbgRoot("Clearing all data, unsubscribed from root");
                 this.data = {};
                 markIncomplete(this.data);
-            }
-            else {
+            } else {
                 var ch = findChain(Utils.parentPath(path), this.data);
                 var leaf = Utils.leafPath(path);
                 var lst = ch.pop();
                 if (lst) {
+                    delete lst[leaf];
                 }
+            }
+            */
+        };
+        RDb3Root.prototype.recursiveClean = function (path, val) {
+            if (typeof (val) !== 'object')
+                return;
+            if (val === exports.KNOWN_NULL)
+                return;
+            dbgRoot("Recursing down, invalidating %s", path);
+            markIncomplete(val);
+            for (var k in val) {
+                var subp = path + '/' + k;
+                if (this.subscriptions[subp]) {
+                    continue;
+                }
+                this.recursiveClean(subp, val[k]);
             }
         };
         RDb3Root.prototype.subscribeQuery = function (query) {
@@ -233,6 +280,29 @@ var __extends = (this && this.__extends) || function (d, b) {
                 nv = nnv;
             }
             this.recurseApplyBroadcast(nv, this.data, null, '', prog);
+            // Special case for root
+            if (val == null && path == '') {
+                this.data = {};
+            }
+            /*
+            if (val == null) {
+                // Special case for root
+                if (path == '') {
+                    this.data = {};
+                } else {
+                    var ch = findChain(sp, this.data);
+                    // .. Recurses up, remove any key that results in an empty object
+                    for (var i = ch.length - 1; i > 0; i--) {
+                        var ac = ch[i];
+                        var par = ch[i-1];
+                        var inpname = sp[i];
+                        if (typeof(ac) === 'object' && Utils.isEmpty(ac)) {
+                            delete par[inpname];
+                        }
+                    }
+                }
+            }
+            */
         };
         RDb3Root.prototype.handleQueryChange = function (id, path, val, prog) {
             var def = this.queries[id];
@@ -275,7 +345,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (newval !== null && typeof (newval) === 'object') {
                 var changed = false;
                 // Change from native value to object
-                if (acval === KNOWN_NULL || !acval || typeof (acval) !== 'object') {
+                if (acval === exports.KNOWN_NULL || !acval || typeof (acval) !== 'object') {
                     changed = true;
                     acval = {};
                     if (isIncomplete(newval)) {
@@ -297,6 +367,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                     var newc = newval[k];
                     var pre = acval[k];
                     var prever = acversions[k];
+                    dbgRoot("%s comparing prever %s->%s : %s->%s", path + '/' + k, prever, version, pre, newc);
                     if (prever && prever > version)
                         continue;
                     if (!isIncomplete(newc)) {
@@ -315,7 +386,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                             changed = true;
                         }
                     }
-                    else if (pre === KNOWN_NULL || typeof (pre) === 'undefined') {
+                    else if (pre === exports.KNOWN_NULL || typeof (pre) === 'undefined') {
                         // Child added
                         pre = {};
                         if (isIncomplete(newc)) {
@@ -368,6 +439,17 @@ var __extends = (this && this.__extends) || function (d, b) {
                 if ((changed && !newval.$l && !isIncomplete(acval)) || newval.$d) {
                     this.broadcastValue(path, acval, queryPath);
                 }
+                /*
+                for (var k in acval) {
+                    if (acval[k] !== KNOWN_NULL) return changed;
+                    if (this.subscriptions[path+'/'+k]) return changed;
+                }
+                if (parentval) {
+                    delete parentval[leaf];
+                } else {
+                    this.data = {};
+                }
+                */
                 return changed;
             }
             else {
@@ -386,21 +468,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                         }
                     }
                     else {
-                        if (parentval[leaf] != KNOWN_NULL) {
+                        if (parentval[leaf] != exports.KNOWN_NULL) {
                             // keep "known missings", to avoid broadcasting this event over and over if it happens
-                            parentval[leaf] = KNOWN_NULL;
-                            this.broadcastValue(path, KNOWN_NULL, queryPath);
+                            parentval[leaf] = exports.KNOWN_NULL;
+                            this.broadcastValue(path, exports.KNOWN_NULL, queryPath);
                             return !!acval;
                         }
                     }
                 }
                 else if (parentval[leaf] != newval) {
-                    if (newval === null) {
-                        parentval[leaf] = KNOWN_NULL;
-                    }
-                    else {
-                        parentval[leaf] = newval;
-                    }
+                    parentval[leaf] = newval;
                     this.broadcastValue(path, newval, queryPath);
                     return true;
                 }
@@ -492,20 +569,29 @@ var __extends = (this && this.__extends) || function (d, b) {
             dbgEvt("Subscribing to %s", this.path);
             this.needSubscribe = true;
             nextTick(function () {
-                dbgEvt("Subscribe to %s not cancelled", _this.path);
+                if (_this.sentSubscribe)
+                    return;
                 if (_this.needSubscribe) {
+                    dbgEvt("Subscribe to %s not cancelled", _this.path);
                     _this.root.sendSubscribe(_this.path);
                     _this.sentSubscribe = true;
                 }
             });
         };
         Subscription.prototype.unsubscribe = function () {
+            var _this = this;
             dbgEvt("Unsubscribing to %s", this.path);
+            var prog = this.root.actualProg();
             this.needSubscribe = false;
-            this.root.unsubscribe(this.path);
-            if (this.sentSubscribe) {
-                this.root.sendUnsubscribe(this.path);
-            }
+            nextTick(function () {
+                if (_this.needSubscribe)
+                    return;
+                _this.root.unsubscribe(_this.path);
+                if (_this.sentSubscribe) {
+                    _this.root.sendUnsubscribe(_this.path);
+                    _this.sentSubscribe = false;
+                }
+            });
         };
         Subscription.prototype.findByType = function (evtype) {
             return this.cbs.filter(function (ocb) { return ocb.eventType == evtype; });
@@ -628,7 +714,10 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.data = data;
             this.root = root;
             this.url = url;
-            if (data != null && typeof (data) !== undefined && reclone) {
+            if (data === exports.KNOWN_NULL) {
+                this.data = null;
+            }
+            else if (data != null && typeof (data) !== undefined && reclone) {
                 var str = JSON.stringify(data);
                 if (str === undefined || str === 'undefined') {
                     this.data = undefined;
@@ -730,6 +819,13 @@ var __extends = (this && this.__extends) || function (d, b) {
             return ret;
         }
         Utils.parentPath = parentPath;
+        function isEmpty(obj) {
+            for (var k in obj) {
+                return false;
+            }
+            return true;
+        }
+        Utils.isEmpty = isEmpty;
     })(Utils || (Utils = {}));
     function splitUrl(url) {
         return Utils.normalizePath(url).split('/');
@@ -772,7 +868,9 @@ var __extends = (this && this.__extends) || function (d, b) {
         return ret;
     }
     function markIncomplete(obj) {
-        Object.defineProperty(obj, '$i', { enumerable: false, configurable: true, value: true });
+        if (obj && typeof (obj) === 'object' && !obj['$i']) {
+            Object.defineProperty(obj, '$i', { enumerable: false, configurable: true, value: true });
+        }
     }
     function markComplete(obj) {
         delete obj.$i;
@@ -789,10 +887,20 @@ var __extends = (this && this.__extends) || function (d, b) {
         }
         return ret;
     }
-    var KNOWN_NULL = {
-        toJSON: function () { return undefined; },
+    /*
+    export var KNOWN_NULL = {};
+    Object.defineProperty(KNOWN_NULL, 'toJSON', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>()=><any>undefined}); //, value:()=><any>undefined});
+    Object.defineProperty(KNOWN_NULL, '$i', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>false}); // writable:false, value:false});
+    */
+    exports.KNOWN_NULL = {};
+    Object.defineProperty(exports.KNOWN_NULL, 'toJSON', { enumerable: true, configurable: false, writable: false, value: function () { return undefined; } });
+    Object.defineProperty(exports.KNOWN_NULL, '$i', { enumerable: true, configurable: false, writable: false, value: false });
+    /*
+    export var KNOWN_NULL = {
+        toJSON: ()=><any>undefined,
         $i: false
     };
+    */
     var RDb3Tree = (function () {
         function RDb3Tree(root, url) {
             this.root = root;
@@ -914,7 +1022,10 @@ var __extends = (this && this.__extends) || function (d, b) {
         * Writes data to this DbTree location.
         */
         RDb3Tree.prototype.set = function (value, onComplete) {
+            // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
+            //this.root.subscribe(this.url);
             var prog = this.root.nextProg();
+            this.root.handleChange(this.url, value, prog);
             this.root.send('s', this.url, value, prog, function (ack) {
                 if (onComplete) {
                     if (ack == 'k') {
@@ -925,13 +1036,17 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                 }
             });
-            this.root.handleChange(this.url, value, prog);
         };
         /**
         * Writes the enumerated children to this DbTree location.
         */
         RDb3Tree.prototype.update = function (value, onComplete) {
+            // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
+            //this.root.subscribe(this.url);
             var prog = this.root.nextProg();
+            for (var k in value) {
+                this.root.handleChange(this.url + '/' + k, value[k], prog);
+            }
             this.root.send('m', this.url, value, prog, function (ack) {
                 if (onComplete) {
                     if (ack == 'k') {
@@ -942,9 +1057,6 @@ var __extends = (this && this.__extends) || function (d, b) {
                     }
                 }
             });
-            for (var k in value) {
-                this.root.handleChange(this.url + '/' + k, value[k], prog);
-            }
         };
         /**
         * Removes the data at this DbTree location.
