@@ -1,5 +1,7 @@
 import * as Debug from 'debug';
-Debug.enable('tsdb:*');
+//Debug.enable('tsdb:*');
+
+import * as Benchmark from 'benchmark';
 
 import * as Client from '../main/Client';
 import * as SocketIO from 'socket.io';
@@ -16,7 +18,7 @@ var dummyProg = 1;
 
 var root: Client.RDb3Root & TestDb3Root;
 
-describe('RDb3Client >', () => {
+describe.only('RDb3Client >', () => {
     describe('Local data >', () => {
 
         beforeEach(function () {
@@ -26,7 +28,7 @@ describe('RDb3Client >', () => {
         describe('Reading >', () => {
             it('Should not find root non existing data', () => {
                 assert("Should return undefined", root.getValue('/node'), is.undefined);
-                assert("Should not have polluted data", root.data, is.strictly.object.matching({}));
+                assert("Should not have polluted data", root.data, is.strictly.object.matching({$i:true}));
             });
             it('Should find root existing data', () => {
                 root.data['node'] = 'ciao';
@@ -68,6 +70,7 @@ describe('RDb3Client >', () => {
             });
             it('Should write object', () => {
                 root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' }, dummyProg++);
+                console.log(root.data);
                 assert("Should return plain object", root.data['node'], is.object.matching({
                     sub1: 'ciao',
                     sub2: 'altro'
@@ -385,6 +388,22 @@ describe('RDb3Client >', () => {
                 assert("Recevied event data", snap.val(), is.strictly.object.matching({ data: 'ciao' }));
             });
 
+            it('Snapshots are immutable', () => {
+                var ref = root.getUrl('/node');
+                var snaps: Client.RDb3Snap[] = [];
+                ref.on('value', (data) => snaps.push(data));
+                root.handleChange('/node', {'data1':'bau'}, dummyProg++);
+                root.handleChange('/node/data2', 'ciao', dummyProg++);
+                root.handleChange('/node/data3', 'miao', dummyProg++);
+                root.handleChange('/node/data1', null, dummyProg++);
+
+                assert("Received events", snaps, is.array.withLength(4));
+                assert("First snap is only one element", snaps[0].val(), is.strictly.object.matching({data1:is.truthy}));
+                assert("Second snap is two element", snaps[1].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy}));
+                assert("Third snap is three element", snaps[2].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy,data3:is.truthy}));
+                assert("Fourth snap is two element", snaps[3].val(), is.strictly.object.matching({data2:is.truthy,data3:is.truthy}));
+            });
+
         });
 
         describe('Known missing >', ()=>{
@@ -472,7 +491,7 @@ describe('RDb3Client >', () => {
                 root.handleChange('/node', {a:{val:1}}, dummyProg++);
                 root.subscribe('/node');
                 root.handleChange('/node', null, dummyProg++);
-                assert("Data should be with known null", root.data, is.strictly.object.matching({node:is.object}));
+                assert("Data should be with known null", root.data, is.strictly.object.matching({node:is.object, $i: true, $v :is.object}));
             });
 
             /*
@@ -668,7 +687,7 @@ describe('RDb3Client >', () => {
                 assert("Received no initial child_changed", movs, is.array.withLength(0));
 
                 root.handleChange('/list', { b: { val: 2 }, a: { val: 1 }, c: { val: 4 } }, dummyProg++);
-
+                
                 assert("Received new child_changed", movs, is.array.withLength(1));
             });
         });
@@ -1129,6 +1148,205 @@ describe('RDb3Client >', () => {
         });
 
         
+    });
+
+
+    describe('Performance >', ()=>{
+        it('PF1 Parsing performance without listeners', function () {
+            this.timeout(35000);
+
+            var bigdata :any = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata :any = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+
+                bigdata['user' + i] = usdata;
+            }
+
+
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+            .add("simple parsing", ()=>{
+                inc++;
+                root = <any>new Client.RDb3Root(null, 'http://ciao/');
+                root.handleChange('/users',bigdata, 4);
+            })
+            .on('complete', function() {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.012773601477272726  dev: 0.001411317392724511");
+                console.log("CNG : " + (stats.mean - 0.012773601477272726) + " : " + (stats.mean/0.012773601477272726));
+                console.log("Inc : " + inc);
+            })
+            .run();
+
+            var data = root.getValue('/users');
+            assert("Value is right", data, is.object.matching(bigdata));
+        });
+
+        it('PF2 Parsing performance with child listeners', function () {
+            this.timeout(35000);
+
+            var bigdata :any = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata :any = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+
+                bigdata['user' + i] = usdata;
+            }
+
+
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+            .add("parsing with events", ()=>{
+                inc++;
+                root = <any>new Client.RDb3Root(null, 'http://ciao/');
+                var ref = root.getUrl('/users');
+                ref.on('value', ()=>{});
+                ref.on('child_added', ()=>{});
+                root.handleChange('/users',bigdata, 4);
+            })
+            .on('complete', function() {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.014293066598591544  dev: 0.00205628694474153");
+                console.log("CNG : " + (stats.mean - 0.014293066598591544) + " : " + (stats.mean/0.014293066598591544));
+                console.log("Inc : " + inc);
+            })
+            .run();
+
+            var data = root.getValue('/users');
+            assert("Value is right", data, is.object.matching(bigdata));
+        });
+
+        it('PF3 Parsing performance with real child listeners', function () {
+            this.timeout(35000);
+
+            var bigdata :any = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata :any = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+
+                bigdata['user' + i] = usdata;
+            }
+
+
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+            .add("parsing with events", ()=>{
+                inc++;
+                root = <any>new Client.RDb3Root(null, 'http://ciao/');
+                var ref = root.getUrl('/users');
+                ref.on('value', (ds)=>{ ds.val(); });
+                ref.on('child_added', (ds)=>{ ds.val(); });
+                root.handleChange('/users',bigdata, 4);
+            })
+            .on('complete', function() {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.008502651874755384  dev: 0.0005244241768842533");
+                console.log("CNG : " + (stats.mean - 0.008502651874755384) + " : " + (stats.mean/0.008502651874755384));
+                console.log("Inc : " + inc);
+            })
+            .run();
+
+            var data = root.getValue('/users');
+            assert("Value is right", data, is.object.matching(bigdata));
+        });
+        
+    });
+});
+
+describe("Test of idea", ()=>{
+    function lazyExtend(prev :any, next :any) {
+        if (!prev) return;
+        for (var k in next) {
+            var val = next[k];
+            if (typeof(val) !== 'object') continue;
+            lazyExtend(prev[k], val);
+        }
+        if (!next.toJSON) next.toJSON = jsonAll;
+        Object.setPrototypeOf(next,prev);
+    }
+
+    function jsonAll() {
+        var tmp = {};
+        for(var key in this) {
+            var to = typeof this[key];
+            if(to !== 'function')
+                tmp[key] = this[key];
+        }
+        return tmp;
+    }
+
+    it("Should work as expected", ()=>{
+        var data = {
+            users: {
+                u1: {
+                    name:'simone',
+                    surname:'gianni',
+                    age:37
+                },
+                u2: {
+                    name:'sara',
+                    surname:'gianni',
+                    age:34
+                }
+            },
+            other: 'ciao'
+        };
+
+        var msg1 :any = {
+            users: {
+                u1: {
+                    name:'simona'
+                }
+            }
+        };
+
+        var msg2 :any = {
+            users: {
+                u2: {
+                    name:'saro'
+                }
+            }
+        };
+
+        lazyExtend(data,msg1);
+        lazyExtend(msg1,msg2); 
+
+        console.log(JSON.stringify(data));
+        console.log(JSON.stringify(msg1));
+        console.log(JSON.stringify(msg2));
+
+        console.log(msg1.users.u2);
     });
 });
 

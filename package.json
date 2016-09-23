@@ -25,6 +25,7 @@
     "socket.io-client": "^1.3.5"
   },
   "devDependencies": {
+    "benchmark": "^2.1.1",
     "del": "1.2.0",
     "dts-bundle": "^0.3.0",
     "gulp": "3.9.0",
@@ -38,14 +39,22 @@
     "gulp-typescript": "2.13.6",
     "gulp-util": "2.2.14",
     "gulp-wait": "0.0.2",
+    "jsdb": "git+https://bitbucket.org/swashp/jsdb.git",
     "merge2": "^0.3.6",
+    "microtime": "^2.1.1",
     "moment": "^2.10.6",
+    "retyped-benchmark-tsd-ambient": "^1.0.0-0",
+    "retyped-core-js-tsd-ambient": "retyped/core-js-tsd-ambient",
+    "retyped-debug-tsd-ambient": "retyped/debug-tsd-ambient",
+    "retyped-mocha-tsd-ambient": "retyped/mocha-tsd-ambient",
+    "retyped-node-tsd-ambient": "retyped/node-tsd-ambient",
+    "retyped-socket.io-client-tsd-ambient": "retyped/socket.io-client-tsd-ambient",
+    "retyped-socket.io-tsd-ambient": "retyped/socket.io-tsd-ambient",
     "run-sequence": "1.1.1",
+    "socket.io": "^1.3.5",
     "sync-exec": "^0.6.2",
     "tsMatchers": "SimoneGianni/tsMatchers",
-    "jsdb": "git+https://bitbucket.org/swashp/jsdb.git",
-    "typescript": "~1.8.10",
-    "socket.io": "^1.3.5"
+    "typescript": "~1.8.10"
   },
   "config": {
     "blanket": {
