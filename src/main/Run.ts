@@ -179,14 +179,14 @@ class Db {
         });
     }
 
-    dump(path :string, to? :string) {
+    export(path :string, to? :string) {
         if (!to) {
             if (path.indexOf(' ') == -1) {
                 to = path;
                 path = '';
             } else {
                 to = path.substr(path.indexOf(' ') + 1);
-                path = path.substr(path.indexOf(' '));
+                path = path.substr(0,path.indexOf(' '));
             }
         }
         this.getRef(path).once('value', (ds)=>{
@@ -205,6 +205,32 @@ class Db {
         });
     }
 
+    import(to :string, path? :string) {
+        if (!path) {
+            if (to.indexOf(' ') == -1) {
+                path = '';
+            } else {
+                path = to.substr(to.indexOf(' ') + 1);
+                to = to.substr(0,to.indexOf(' '));
+            }
+        }
+        var fto = to.trim();
+        if (!Fs.existsSync(fto)) {
+            throw new Error('Cannot find file "' + fto + '"'); 
+        }
+        var content = Fs.readFileSync(fto,"utf8");
+        var jsonContent = JSON.parse(content);
+        console.log(jsonContent);
+        var ref = this.getRef(path);
+        ref.set(jsonContent, (err)=>{
+            if (err) {
+                wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>err);
+            } else {
+                wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>Fs.statSync(fto).size + ' bytes loaded');
+            }
+        });
+    }
+
     ls(path :string = this.path, ...extra :string[]) :void {
         if (!extra || extra.length == 0) {
             if (path.indexOf(' ') != -1) {
@@ -216,15 +242,16 @@ class Db {
             }
         }
         this.getRef(path).once('value', (ds)=>{
-            wrapOutput('LS ' + this.describeRef(ds.ref()).toString() + ' ' + extra, ()=>{
-                ds.forEach((cs)=>{
-                    var line = cs.key();
-                    for (var i = 0; i < extra.length; i++) {
-                        line += '\t| ' + cs.child(extra[i]).val();
+            this.doResolve(ds.val(), (val)=>{
+                wrapOutput('LS ' + this.describeRef(ds.ref()).toString() + ' ' + extra, ()=>{
+                    for (var line in val) {
+                        for (var i = 0; i < extra.length; i++) {
+                            line += '\t| ' + Util.inspect(val[line][extra[i]], {depth:1});
+                        }
+                        console.log(line);
                     }
-                    console.log(line);
-                }); 
-                return null;
+                    return null;
+                });
             });
         });
     }
@@ -291,6 +318,10 @@ class Db {
         });
     }
 
+    delete(path :string) {
+        this.set(path, null);
+    }
+
     query(path :string) :QueryDb {
         var ref = this.getRef(path);
         var n = progQuery++;
@@ -303,12 +334,14 @@ class Db {
     static exp = [
         'cd','Change "directory", moves inside a child node',
         'get','Loads data and display them, also place them in db.lastVal',
-        'dump','Loads data and save them to file',
+        'export','Save data from DB to a file',
+        'import','Load data from file to DB',
         'ls','List children in current path',
         'pwd','Print current path',
         'on','Listen on value changes and dumps them to screen',
         'onChild','Listen on child_added and child_removed and dumps them on screen',
         'set','Set a value, overwriting what is there now',
+        'delete','Deletes the current or provided path, equal to set null',
         'off','Stops listening, opposite of "on"',
         'query','Creates a query, standard query methods (orderByChild, equalTo etc..) and methods (.get .dump etc..) applies to the query object',
         'setResolve','Turns on or off auto resolving of references, it\'s handy but can be very slow'];
