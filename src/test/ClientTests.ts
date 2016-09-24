@@ -8,7 +8,7 @@ import * as SocketIO from 'socket.io';
 import * as SocketIOClient from 'socket.io-client';
 
 import {assert, is} from 'tsmatchers';
-import {Matcher,matcherOrEquals} from 'tsmatchers/js/main/tsMatchers';
+import {Matcher,matcherOrEquals,later,check} from 'tsmatchers/js/main/tsMatchers';
 
 interface TestDb3Root {
     data: any;
@@ -396,13 +396,76 @@ describe.only('RDb3Client >', () => {
                 root.handleChange('/node/data2', 'ciao', dummyProg++);
                 root.handleChange('/node/data3', 'miao', dummyProg++);
                 root.handleChange('/node/data1', null, dummyProg++);
+                root.handleChange('/node/data1', 'pio', dummyProg++);
 
-                assert("Received events", snaps, is.array.withLength(4));
+                assert("Received events", snaps, is.array.withLength(5));
                 assert("First snap is only one element", snaps[0].val(), is.strictly.object.matching({data1:is.truthy}));
                 assert("Second snap is two element", snaps[1].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy}));
                 assert("Third snap is three element", snaps[2].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy,data3:is.truthy}));
                 assert("Fourth snap is two element", snaps[3].val(), is.strictly.object.matching({data2:is.truthy,data3:is.truthy}));
+                assert("Third snap is three element", snaps[4].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy,data3:is.truthy}));
+
+                var keys :string[] = [];
+
+                snaps[0].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in first snap", keys, is.array.equals(['data1']));
+
+                keys = [];
+                snaps[1].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in second snap", keys, is.array.equals(['data1','data2']));
+
+                keys = [];
+                snaps[2].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in third snap", keys, is.array.equals(['data1','data2','data3']));
+
+                keys = [];
+                snaps[3].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in fourth snap", keys, is.array.equals(['data2','data3']));
+
+                keys = [];
+                snaps[4].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in fifth snap", keys, is.array.equals(['data1','data2','data3']));
             });
+
+            it('Snapshots are immutable also with nested objects', () => {
+                var ref = root.getUrl('/node');
+                var snaps: Client.RDb3Snap[] = [];
+                ref.on('value', (data) => snaps.push(data));
+                root.handleChange('/node', {'data1':{val:'bau'}}, dummyProg++);
+                root.handleChange('/node/data2', {val:'ciao'}, dummyProg++);
+                root.handleChange('/node/data3', {val:'miao'}, dummyProg++);
+                root.handleChange('/node/data1', null, dummyProg++);
+                root.handleChange('/node/data1', {val:'pio'}, dummyProg++);
+
+                assert("Received events", snaps, is.array.withLength(5));
+                assert("First snap is only one element", snaps[0].val(), is.strictly.object.matching({data1:is.truthy}));
+                assert("Second snap is two element", snaps[1].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy}));
+                assert("Third snap is three element", snaps[2].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy,data3:is.truthy}));
+                assert("Fourth snap is two element", snaps[3].val(), is.strictly.object.matching({data2:is.truthy,data3:is.truthy}));
+                assert("Third snap is three element", snaps[4].val(), is.strictly.object.matching({data1:is.truthy,data2:is.truthy,data3:is.truthy}));
+
+                var keys :string[] = [];
+
+                snaps[0].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in first snap", keys, is.array.equals(['data1']));
+
+                keys = [];
+                snaps[1].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in second snap", keys, is.array.equals(['data1','data2']));
+
+                keys = [];
+                snaps[2].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in third snap", keys, is.array.equals(['data1','data2','data3']));
+
+                keys = [];
+                snaps[3].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in fourth snap", keys, is.array.equals(['data2','data3']));
+
+                keys = [];
+                snaps[4].forEach((cs)=>{ keys.push(cs.key()); });
+                assert("Right keys in fifth snap", keys, is.array.equals(['data1','data2','data3']));
+            });
+            
 
         });
 
@@ -637,11 +700,14 @@ describe.only('RDb3Client >', () => {
                 for (var k in obj) {
                     root.handleChange('/list/' + k, null, dummyProg++);
                 }
+
+                assert("Received no child_addeds on delete with explicit null", adds, is.array.withLength(0));
+                
                 for (var k in obj) {
                     root.handleChange('/list/' + k + '/val', null, dummyProg++);
                 }
 
-                assert("Received no child_addeds on delete", adds, is.array.withLength(0));
+                assert("Received no child_addeds on deleted element nested nullification", adds, is.array.withLength(0));
                 assert("Received all child_removeds", rems, is.array.withLength(4));
             });
 
@@ -757,11 +823,11 @@ describe.only('RDb3Client >', () => {
 
                 root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
 
-                assert("Received child_changed", chng, is.array.withLength(0));
+                assert("Received no initial child_changed", chng, is.array.withLength(0));
 
                 root.handleQueryChange('1a', '/list/a/val', 5, dummyProg++);
 
-                assert("Received child_changed", chng, is.array.withLength(1));
+                assert("Received first child_changed", chng, is.array.withLength(1));
                 for (var i = 0; i < chng.length; i++) {
                     assert("Received changed snapshots does not expose url meta-path", chng[i].ref().url.substr(0,6), '/list/');
                 }
@@ -843,7 +909,7 @@ describe.only('RDb3Client >', () => {
                 root.handleQueryChange('1a', '/list/c/val', 2, dummyProg++);
 
                 assert("Kys are sorted", items, is.array.equals(['c']));
-                assert("Pre keys are correct", preks, is.array.equals(['a']));
+                assert("Pre keys are correct at first round", preks, is.array.equals(['a']));
 
                 ref.off('child_changed');
 
@@ -854,7 +920,7 @@ describe.only('RDb3Client >', () => {
                 root.handleQueryChange('1a', '/list/c/val', 5, dummyProg++);
 
                 assert("Kys are sorted", items, is.array.equals(['c']));
-                assert("Pre keys are correct", preks, is.array.equals(['b']));
+                assert("Pre keys are correct at second round", preks, is.array.equals(['b']));
             });
             
 
@@ -950,11 +1016,12 @@ describe.only('RDb3Client >', () => {
             var trcb = tr.on('value', (ds)=>{trval = ds});
 
             var val = {list:{a:1,b:2},other:{c:3,d:4}}; 
+            var check = JSON.parse(JSON.stringify(val));
 
             tr.set(val);
 
-            assert("Root value set", trval.val(), is.object.matching(val));
-            assert("List value set", listval.val(), is.object.matching(val.list));
+            assert("Root value set", trval.val(), is.object.matching(check));
+            assert("List value set", listval.val(), is.object.matching(check.list));
 
 
             tr.set(null);

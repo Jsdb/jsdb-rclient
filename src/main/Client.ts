@@ -301,6 +301,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
         this.recurseApplyBroadcast(nv, this.data, null, '', prog, {});
 
+        this.data = nv;
+
         // Special case for root
         if (val == null && path == '') {
             this.data = {};
@@ -344,10 +346,19 @@ export class RDb3Root implements Spi.DbTreeRoot {
             nv = nnv;
         }
         nv.$l = !def.done;
-
+        
         if (!this.data['q'+id]) this.data['q'+id] = {};
         nv['$sorter'] = this.data['q'+id]['$sorter'] = def.makeSorter();
-        this.recurseApplyBroadcast(nv, this.data['q'+id], this.data, '/q'+id, prog, {}, def.path);
+
+        var fnv :any = {};
+        fnv['q' + id] = nv;
+        markIncomplete(fnv);
+
+        // TODO what to pass here as a parentval??
+        this.recurseApplyBroadcast(nv, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+
+        delete nv.$l;
+        this.data = fnv;
 
         if (def.limit) {
             var acdata = this.data['q'+id];
@@ -359,8 +370,13 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     torem[k] = null;
                 }
                 markIncomplete(torem);
-                // TODO probably here the version should not be prog, given that the deletion are based on the current situation
-                this.recurseApplyBroadcast(torem, this.data['q'+id], this.data, '/q'+id, prog, {}, def.path);
+                fnv = {};
+                fnv['q' + id] = torem;
+                markIncomplete(fnv);
+                // TODO what to pass here as a parentval??
+                // TODO probably here the sversion should not be prog, given that the deletion are based on the current situation
+                this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+                this.data = fnv;
             }
         }
     }
@@ -372,23 +388,34 @@ export class RDb3Root implements Spi.DbTreeRoot {
             var changed = false;
             // Change from native value to object
             if (acval === KNOWN_NULL || !acval || typeof(acval) !== 'object') {
-                changed = true;
+                // it is not yet changed : suppose it is /par/par/val : null, with current data empty, creating the two par should not 
+                // trigger anything until one leaf value is set, and set to something valuable
+                //changed = true;
                 acval = {};
+                /*
                 if (newValIncomplete) {
                     markIncomplete(acval);
                 }
                 parentval[leaf] = acval;
+                */
+            } else {
+                // A complete value arrived, previous one was icomplete, so mark it as explicitly complete and trigger value event if any
+                if (!newValIncomplete && isIncomplete(acval, state)) {
+                    newval.$i = false;
+                    changed = true;
+                }
+
+                // An incomplete new value arrived, but previous one was complete, so this is a partial update, mark it as explicitly complete but no trigger
+                if (newValIncomplete && !isIncomplete(acval, state)) {
+                    newval.$i = false;
+                }
+
             }
 
             var acversions = getVersions(acval);
             var preHigher = acversions.$higher || 0;
             if (version > preHigher) {
                 acversions.$higher = version;
-            }
-
-            if (!newValIncomplete && isIncomplete(acval, state)) {
-                markComplete(acval);
-                changed = true;
             }
 
             var sub = this.subscriptions[path];
@@ -401,6 +428,9 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     }
                 }
                 if (!hasGrandSubs) {
+                    //Object.setPrototypeOf(newval, acval);
+                    return true;
+                    /*
                     if (parentval) {
                         parentval[leaf] = newval;
                     } else {
@@ -413,6 +443,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
                         }
                     }
                     return true;
+                    */
                 }
             }
 
@@ -428,7 +459,11 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
 
                 dbgRoot("%s comparing prever %s->%s : %s->%s", path+'/'+k, prever, version,pre,newc);
-                if (prever && prever > version) continue;
+                if (prever && prever > version) {
+                    // Version conflict, update new data with old data :)
+                    delete newval[k];
+                    continue;
+                }
 
                 var acstate :WritingState = {
                     version: prever,
@@ -442,30 +477,34 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 if (newc === null) {
                     // Explicit delete
                     var presnap = new RDb3Snap(pre, this, (queryPath||path)+'/'+k);
-                    if (this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k, version, acstate)) {
+                    if (this.recurseApplyBroadcast(newc, pre, newval, path +'/'+k, version, acstate)) {
                         if (sub && sub.types['child_removed']) {
                             this.broadcastChildRemoved(path, k, presnap, queryPath);
                         }
                         // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
                         //this.broadcastChildMoved(path, k, acval[k]);
                         // If we are in a query, really remove the child, no need for KNOWN_NULL
-                        if (queryPath) delete acval[k];
+                        //if (queryPath) delete acval[k];
                         changed = true;
                     }
                 } else if (pre === KNOWN_NULL || typeof(pre) === 'undefined') {
                     // Child added
-                    pre = {};
+                    //pre = {};
+                    /*
                     if (isIncomplete(newc)) {
                         markIncomplete(pre);
                     }
                     acval[k] = pre;
-                    if (this.recurseApplyBroadcast(newc, pre, acval, path +'/'+k, version, acstate)) {
+                    */
+                    if (this.recurseApplyBroadcast(newc, null, newval, path +'/'+k, version, acstate)) {
                         changed = true;
                         if (sub && sub.types['child_added']) {
-                            this.broadcastChildAdded(path, k, acval[k], queryPath, ()=>findPreviousKey(acval, k));
+                            this.broadcastChildAdded(path, k, newc, queryPath, ()=>findPreviousKey(newval, k, acval));
                         }
+                        /*
                     } else {
                         delete acval[k];
+                        */
                     }
                 } else {
                     // Maybe child changed
@@ -477,14 +516,14 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     if (sub) {
                         acstate.hasChildChanged = acstate.hasChildChanged || !!sub.types['child_changed'];
                     }
-                    if (this.recurseApplyBroadcast(newc, pre, acval, path+'/'+k, version, acstate)) {
+                    if (this.recurseApplyBroadcast(newc, pre, newval, path+'/'+k, version, acstate)) {
                         changed = true;
                         // Consider sorting and previous key
                         if (sub && (sub.types['child_moved'] || sub.types['child_changed'])) {
-                            var acpre = findPreviousKey(acval, k);
-                            this.broadcastChildChanged(path, k, acval[k], queryPath, ()=>acpre);
-                            if (prepre != acpre) {
-                                this.broadcastChildMoved(path, k, acval[k], queryPath, ()=>acpre);
+                            var acpre = findPreviousKey(newval, k, acval);
+                            this.broadcastChildChanged(path, k, newc, queryPath, ()=>acpre);
+                            if (prepre && prepre != acpre) {
+                                this.broadcastChildMoved(path, k, newc, queryPath, ()=>acpre);
                             }
                         }
                     }
@@ -497,14 +536,18 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     if (k.charAt(0) == '$') continue;
                     if (newval[k] === null || typeof(newval[k]) === 'undefined') {
                         var prever = acversions[k];
-                        if (prever && prever > version) continue;
+                        if (prever && prever > version) {
+                            // Version conflict, update new data with old data :)
+                            delete newval[k];
+                            continue;
+                        }
                         var pre = acval[k];
                         acversions[k] = version;
                         var presnap :RDb3Snap = null;
                         if (sub && sub.types['child_removed']) {
                             presnap = new RDb3Snap(pre, this, (queryPath || path) + '/' + k);
                         }
-                        if (this.recurseApplyBroadcast(null, pre, acval, path +'/'+k, version, acstate)) {
+                        if (this.recurseApplyBroadcast(null, pre, newval, path +'/'+k, version, acstate)) {
                             if (sub && sub.types['child_removed']) {
                                 this.broadcastChildRemoved(path, k, presnap, queryPath);
                             }
@@ -515,9 +558,17 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     }
                 }
             }
-            if ((changed && !newval.$l && !isIncomplete(acval, state)) || newval.$d) {
+
+            if (newval && acval) {
+                // Preserve completeness by marking it explicitly
+                if (!('$i' in newval)) newval.$i = newValIncomplete;
+
+                Object.setPrototypeOf(newval, acval);
+            }
+
+            if ((changed && !newval.$l && !isIncomplete(newval, state)) || newval.$d) {
                 if (sub && sub.types['value']) {
-                    this.broadcastValue(path, acval, queryPath);
+                    this.broadcastValue(path, newval, queryPath);
                 }
             }
             /*
@@ -541,13 +592,13 @@ export class RDb3Root implements Spi.DbTreeRoot {
             if (newval === null) {
                 if (queryPath) {
                     // If in a query, don't use known nulls
-                    if (parentval[leaf] != null) {
-                        delete parentval[leaf];
+                    if (acval != null) {
+                        parentval[leaf] = undefined;
                         this.broadcastValue(path, null, queryPath);
                         return true;
                     }
                 } else {
-                    if (parentval[leaf] != KNOWN_NULL) {
+                    if (acval != KNOWN_NULL) {
                         // keep "known missings", to avoid broadcasting this event over and over if it happens
                         parentval[leaf] = KNOWN_NULL;
                         this.broadcastValue(path, KNOWN_NULL, queryPath);
@@ -555,8 +606,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     }
                 }
                 // TODO propagate the nullification downwards to raise events on children, if any
-            } else if (parentval[leaf] != newval) {
-                parentval[leaf] = newval;
+            } else if (acval != newval) {
+                //parentval[leaf] = newval;
                 this.broadcastValue(path, newval, queryPath);
                 return true;
             }
@@ -822,6 +873,7 @@ export class RDb3Snap implements Spi.DbTreeSnap {
     ) {
         if (data === KNOWN_NULL) {
             this.data = null;
+            /*
         } else if (data != null && typeof (data) !== undefined && reclone) {
             var str = JSON.stringify(data, (k,v)=>k.length && k.charAt(0) == '$' ? undefined : v);
             if (str === undefined || str === 'undefined') {
@@ -833,6 +885,7 @@ export class RDb3Snap implements Spi.DbTreeSnap {
             }
             
             if (data['$sorter']) this.data['$sorter'] = data['$sorter'];
+            */
         } else {
             this.data = data;
         }
@@ -844,7 +897,17 @@ export class RDb3Snap implements Spi.DbTreeSnap {
 
     val(): any {
         if (!this.exists()) return null;
-        return JSON.parse(JSON.stringify(this.data));
+        return JSON.parse(JSON.stringify(this.data, (k,v)=>{
+            if (k.length && k.charAt(0) == '$') return undefined;
+            if (typeof(v) !== 'object') return v;
+            var tmp :any = {};
+            for(var key in v) {
+                var to = typeof v[key];
+                if(to !== 'function')
+                    tmp[key] = v[key];
+            }
+            return tmp;
+        }));
     }
     child(childPath: string): RDb3Snap {
         var subs = findChain(childPath, this.data, true, false);
@@ -857,7 +920,9 @@ export class RDb3Snap implements Spi.DbTreeSnap {
         if (!this.exists()) return;
         var ks = getKeysOrdered(this.data);
         for (var i = 0; i < ks.length; i++) {
-            if (childAction(this.child(ks[i]))) return true;
+            var child = this.child(ks[i]);
+            if (!child.exists()) continue;
+            if (childAction(child)) return true;
         }
         return false;
     }
@@ -874,27 +939,36 @@ export class RDb3Snap implements Spi.DbTreeSnap {
 
 type SortFunction = (a: any, b: any) => number;
 
-function getKeysOrdered(obj: any, fn?: SortFunction): string[] {
+function getKeysOrdered(obj: any, fn?: SortFunction, otherObj? :any): string[] {
     if (!obj) return [];
     fn = fn || obj['$sorter'];
     var sortFn: SortFunction = null;
     if (fn) {
         sortFn = (a, b) => {
-            return fn(obj[a], obj[b]);
+            var va = obj[a] || (otherObj ? otherObj[a] : null);
+            var vb = obj[b] || (otherObj ? otherObj[b] : null);
+            return fn(va, vb);
         };
     }
-    var ks = Object.keys(obj);
     var ret: string[] = [];
-    for (var i = 0; i < ks.length; i++) {
-        if (ks[i].charAt(0) == '$') continue;
-        ret.push(ks[i]);
+    for (var k in obj) {
+        if (k.charAt(0) == '$') continue;
+        if (obj[k] === undefined || obj[k] == KNOWN_NULL) continue;
+        ret.push(k);
+    }
+    if (otherObj) {
+        for (var k in otherObj) {
+            if (k.charAt(0) == '$') continue;
+            if (otherObj[k] === undefined || otherObj[k] == KNOWN_NULL) continue;
+            ret.push(k);
+        }
     }
     ret = ret.sort(sortFn);
     return ret;
 }
 
-function findPreviousKey(obj :any, k :string) :string {
-    var ks = getKeysOrdered(obj);
+function findPreviousKey(obj :any, k :string, otherObj? :any) :string {
+    var ks = getKeysOrdered(obj, null, otherObj);
     var i = ks.indexOf(k);
     if (i<1) return null;
     return ks[i-1];
