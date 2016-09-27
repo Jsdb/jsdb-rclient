@@ -8,11 +8,61 @@ import {Spi,Api} from 'jsdb';
 type BroadcastCb = (sub :Subscription, acpath :string, acval:any)=>void;
 export type SortFunction = (a: any, b: any) => number;
 
+export class EventsBatch {
+    constructor (public subscription :Subscription) {}
+
+    events = {
+        child_added :<any[][]>[],
+        child_removed :<any[][]>[],
+        child_changed :<any[][]>[],
+        child_moved :<any[][]>[],
+        value :<any[][]>[]
+    }
+
+    merge(other :EventsBatch) {
+        for (var k in other.events) {
+            var events :any[][] = (<any>other.events)[k];
+            if (!events) continue;
+            for (var i = 0; i < events.length; i++) {
+                (<any[][]>(<any>this.events)[k]).push(events[i]);
+            }
+        }
+    }
+
+    send(toValue = false) {
+        var cbs = this.subscription.cbs;
+        // Dispatch the events to the handlers
+        for (var i = 0; i < cbs.length; i++) {
+            var cb = cbs[i];
+
+            if (!toValue && cb.eventType == 'value') continue;
+            if (toValue && cb.eventType != 'value') continue;
+
+            var events = <any[][]>(<any>this.events)[cb.eventType];
+            if (events) {
+                // Sort events
+                events.sort((eva:any,evb:any)=>{
+                    return eva[2] < evb[2] ? -1 : eva[2] == evb[2] ? 0 : 1;
+                });
+                for (var j = 0; j < events.length; j++) {
+                    events[j].splice(2,1);
+                    dbgEvt("Dispatching event %s:%s to %s", this.subscription.path, cb.eventType, cb._intid);
+                    cb.callback.apply(this.subscription.root, events[j]);
+                }
+            }
+        }
+        if (!toValue) this.send(true);
+    }
+
+}
+
 export class MergeState {
     writeVersion = 0;
     deepInspect = false;
     insideComplete = false;
     highest = 0;
+
+    batches :EventsBatch[] = [];
 
     derive() {
         var ret = new MergeState();
@@ -20,7 +70,14 @@ export class MergeState {
         ret.deepInspect = this.deepInspect;
         ret.insideComplete = this.insideComplete;
         ret.highest = this.highest;
+        ret.batches = this.batches;
         return ret;
+    }
+
+    sendEvents() {
+        for (var i = 0; i < this.batches.length; i++) {
+            this.batches[i].send();
+        }
     }
 
 }
@@ -462,6 +519,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
         this.data = nv;
 
+        state.sendEvents();
+
         // Special case for root
         if (val == null && path == '') {
             this.data = {};
@@ -644,18 +703,18 @@ export class RDb3Root implements Spi.DbTreeRoot {
             var forceModified = meta.incomplete === false && wasIncomplete !== false; 
 
             if (sub) {
-                sub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
+                state.batches.push(sub.checkHandlers(meta, newval, oldval, modifieds, forceModified));
             }
             if (atQuery) {
-                querySub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
+                state.batches.push(querySub.checkHandlers(meta, newval, oldval, modifieds, forceModified));
             }
 
             return !!modifieds.length;
         } else {
             // We are handling a leaf value
-            if (sub) sub.checkHandlers(null, newval, oldval, null, false);
+            if (sub) state.batches.push(sub.checkHandlers(null, newval, oldval, null, false));
             // TODO this should never happen, value of a query with a single leaf primitive value??
-            if (atQuery) querySub.checkHandlers(null, newval, oldval, null, false);
+            if (atQuery) state.batches.push(querySub.checkHandlers(null, newval, oldval, null, false));
             return newval != oldval;
         }
     }
@@ -743,7 +802,9 @@ export class Subscription {
         });
     }
 
-    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) {
+    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) :EventsBatch {
+        var batch = new EventsBatch(this);
+
         if (meta) {
             // Update the metadata with current keys
             var added :boolean[] = [];
@@ -762,40 +823,16 @@ export class Subscription {
 
             // Build proper events for each event type
             // TODO we could do this only if there is someone listening and save few cpu ticks
-            var handlerParams = {
-                child_added : <any[][]>[],
-                child_removed : <any[][]>[],
-                child_changed : <any[][]>[],
-                child_moved : <any[][]>[]
-            };
-
             for (var i = 0; i < modified.length; i++) {
                 var k = modified[i];
                 if (added[i] === true) {
-                    handlerParams.child_added.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                    batch.events.child_added.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                 } else if (added[i] === false) {
-                    handlerParams.child_removed.push([new RDb3Snap(oldval[k], this.root, this.path + '/' + k),null,0]);
+                    batch.events.child_removed.push([new RDb3Snap(oldval[k], this.root, this.path + '/' + k),null,0]);
                 } else {
-                    handlerParams.child_changed.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                    batch.events.child_changed.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                     if (sortchange[i].prev != sortchange[i].actual) {
-                        handlerParams.child_moved.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
-                    }
-                }
-            }
-
-            // Dispatch the events to the handlers
-            for (var i = 0; i < this.cbs.length; i++) {
-                var cb = this.cbs[i];
-                var events = <any[][]>(<any>handlerParams)[cb.eventType];
-                if (events) {
-                    // Sort events
-                    events.sort((eva:any,evb:any)=>{
-                        return eva[2] < evb[2] ? -1 : eva[2] == evb[2] ? 0 : 1;
-                    });
-                    for (var j = 0; j < events.length; j++) {
-                        events[j].splice(2,1);
-                        dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
-                        cb.callback.apply(this.root, events[j]);
+                        batch.events.child_moved.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                     }
                 }
             }
@@ -808,31 +845,28 @@ export class Subscription {
                 if (newval && typeof(newval) === 'object') {
                     if ((!modified || modified.length == 0) || meta.incomplete) {
                         dbgEvt("Not notifying %s:value because modified %s or incomplete %s", this.path, modified && modified.length, meta.incomplete);
-                        return;
+                        return batch;
                     }
                 } else {
                     if (newval === null) {
                         if (oldval === null) {
                             dbgEvt("Not notifying %s:value both are nulls", this.path);
-                            return;
+                            return batch;
                         }
                     } else if (newval === undefined) {
                         // Always broadcast an explicit undefined
                     } else {
                         if (newval == oldval) {
                             dbgEvt("Not notifying %s:value both are same", this.path);
-                            return;
+                            return batch;
                         }
                     }
                 }
             }
-            var event = [new RDb3Snap(newval, this.root, this.path), null];
-            for (var i = 0; i < valueHandlers.length; i++) {
-                var cb = valueHandlers[i];
-                dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
-                cb.callback.apply(this.root, event);
-            }
+            var event = [new RDb3Snap(newval, this.root, this.path), null, 0];
+            batch.events.value.push(event);
         }
+        return batch;
     }
 
     findByType(evtype :string) :Handler[] {
@@ -918,7 +952,7 @@ export class QuerySubscription extends Subscription {
 
 
     // We handle this a bit differently for queries
-    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) {
+    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) :EventsBatch {
         // Copy from new val to my new val, only own values
         var mynewval :any = {};
         // TODO maybe use modified?
@@ -936,7 +970,7 @@ export class QuerySubscription extends Subscription {
         this.myData = mynewval;
 
         // Forward to super.checkHandlers using my meta and my values
-        super.checkHandlers(this.myMeta, this.myData, myoldval, mymodifieds, force);
+        var batch = super.checkHandlers(this.myMeta, this.myData, myoldval, mymodifieds, force);
 
         // Remove elements if they are too much
         if (this.limit && this.myMeta.sorted.length > this.limit) {
@@ -958,8 +992,9 @@ export class QuerySubscription extends Subscription {
             this.myData = remval;
 
             // Delegate all event stuff to usual method
-            super.checkHandlers(this.myMeta, this.myData, mynewval, remkeys, false);
+            batch.merge(super.checkHandlers(this.myMeta, this.myData, mynewval, remkeys, false));
         }
+        return batch;
     }
 
     markDone() {
@@ -1522,9 +1557,9 @@ var nextTick = (function () {
 	return null;
 }());
 
-// Quick polyfill for setPrototypeOf
 
-var setPrototypeOf = (function() { 
+// Quick polyfill for setPrototypeOf
+var setPrototypeOf = (function() {
 
     function setProtoOf(obj :any, proto :any) {
         obj.__proto__ = proto;

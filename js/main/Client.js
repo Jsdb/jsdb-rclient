@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160927_172424_master_1.0.0_ba17ad0
+ * TSDB remote client 20160927_233748_master_1.0.0_6825c2c
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -15,12 +15,63 @@ var __extends = (this && this.__extends) || function (d, b) {
 
 })(function (require, exports) {
     "use strict";
+    var EventsBatch = (function () {
+        function EventsBatch(subscription) {
+            this.subscription = subscription;
+            this.events = {
+                child_added: [],
+                child_removed: [],
+                child_changed: [],
+                child_moved: [],
+                value: []
+            };
+        }
+        EventsBatch.prototype.merge = function (other) {
+            for (var k in other.events) {
+                var events = other.events[k];
+                if (!events)
+                    continue;
+                for (var i = 0; i < events.length; i++) {
+                    this.events[k].push(events[i]);
+                }
+            }
+        };
+        EventsBatch.prototype.send = function (toValue) {
+            if (toValue === void 0) { toValue = false; }
+            var cbs = this.subscription.cbs;
+            // Dispatch the events to the handlers
+            for (var i = 0; i < cbs.length; i++) {
+                var cb = cbs[i];
+                if (!toValue && cb.eventType == 'value')
+                    continue;
+                if (toValue && cb.eventType != 'value')
+                    continue;
+                var events = this.events[cb.eventType];
+                if (events) {
+                    // Sort events
+                    events.sort(function (eva, evb) {
+                        return eva[2] < evb[2] ? -1 : eva[2] == evb[2] ? 0 : 1;
+                    });
+                    for (var j = 0; j < events.length; j++) {
+                        events[j].splice(2, 1);
+                        dbgEvt("Dispatching event %s:%s to %s", this.subscription.path, cb.eventType, cb._intid);
+                        cb.callback.apply(this.subscription.root, events[j]);
+                    }
+                }
+            }
+            if (!toValue)
+                this.send(true);
+        };
+        return EventsBatch;
+    }());
+    exports.EventsBatch = EventsBatch;
     var MergeState = (function () {
         function MergeState() {
             this.writeVersion = 0;
             this.deepInspect = false;
             this.insideComplete = false;
             this.highest = 0;
+            this.batches = [];
         }
         MergeState.prototype.derive = function () {
             var ret = new MergeState();
@@ -28,7 +79,13 @@ var __extends = (this && this.__extends) || function (d, b) {
             ret.deepInspect = this.deepInspect;
             ret.insideComplete = this.insideComplete;
             ret.highest = this.highest;
+            ret.batches = this.batches;
             return ret;
+        };
+        MergeState.prototype.sendEvents = function () {
+            for (var i = 0; i < this.batches.length; i++) {
+                this.batches[i].send();
+            }
         };
         return MergeState;
     }());
@@ -114,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20160927_172424_master_1.0.0_ba17ad0';
+    exports.VERSION = '20160927_233748_master_1.0.0_6825c2c';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -435,6 +492,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             state.writeVersion = prog;
             this.merge('', nv, this.data, state, querySub);
             this.data = nv;
+            state.sendEvents();
             // Special case for root
             if (val == null && path == '') {
                 this.data = {};
@@ -605,20 +663,20 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // TODO if this passed from incomplete to complete, then it is CHANGED and should trigger events
                 var forceModified = meta.incomplete === false && wasIncomplete !== false;
                 if (sub) {
-                    sub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
+                    state.batches.push(sub.checkHandlers(meta, newval, oldval, modifieds, forceModified));
                 }
                 if (atQuery) {
-                    querySub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
+                    state.batches.push(querySub.checkHandlers(meta, newval, oldval, modifieds, forceModified));
                 }
                 return !!modifieds.length;
             }
             else {
                 // We are handling a leaf value
                 if (sub)
-                    sub.checkHandlers(null, newval, oldval, null, false);
+                    state.batches.push(sub.checkHandlers(null, newval, oldval, null, false));
                 // TODO this should never happen, value of a query with a single leaf primitive value??
                 if (atQuery)
-                    querySub.checkHandlers(null, newval, oldval, null, false);
+                    state.batches.push(querySub.checkHandlers(null, newval, oldval, null, false));
                 return newval != oldval;
             }
         };
@@ -703,6 +761,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             });
         };
         Subscription.prototype.checkHandlers = function (meta, newval, oldval, modified, force) {
+            var batch = new EventsBatch(this);
             if (meta) {
                 // Update the metadata with current keys
                 var added = [];
@@ -720,40 +779,18 @@ var __extends = (this && this.__extends) || function (d, b) {
                 var sortchange = meta.modifySorted(modified, added, this.makeSorter());
                 // Build proper events for each event type
                 // TODO we could do this only if there is someone listening and save few cpu ticks
-                var handlerParams = {
-                    child_added: [],
-                    child_removed: [],
-                    child_changed: [],
-                    child_moved: []
-                };
                 for (var i = 0; i < modified.length; i++) {
                     var k = modified[i];
                     if (added[i] === true) {
-                        handlerParams.child_added.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                        batch.events.child_added.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                     }
                     else if (added[i] === false) {
-                        handlerParams.child_removed.push([new RDb3Snap(oldval[k], this.root, this.path + '/' + k), null, 0]);
+                        batch.events.child_removed.push([new RDb3Snap(oldval[k], this.root, this.path + '/' + k), null, 0]);
                     }
                     else {
-                        handlerParams.child_changed.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                        batch.events.child_changed.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                         if (sortchange[i].prev != sortchange[i].actual) {
-                            handlerParams.child_moved.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
-                        }
-                    }
-                }
-                // Dispatch the events to the handlers
-                for (var i = 0; i < this.cbs.length; i++) {
-                    var cb = this.cbs[i];
-                    var events = handlerParams[cb.eventType];
-                    if (events) {
-                        // Sort events
-                        events.sort(function (eva, evb) {
-                            return eva[2] < evb[2] ? -1 : eva[2] == evb[2] ? 0 : 1;
-                        });
-                        for (var j = 0; j < events.length; j++) {
-                            events[j].splice(2, 1);
-                            dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
-                            cb.callback.apply(this.root, events[j]);
+                            batch.events.child_moved.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
                         }
                     }
                 }
@@ -765,14 +802,14 @@ var __extends = (this && this.__extends) || function (d, b) {
                     if (newval && typeof (newval) === 'object') {
                         if ((!modified || modified.length == 0) || meta.incomplete) {
                             dbgEvt("Not notifying %s:value because modified %s or incomplete %s", this.path, modified && modified.length, meta.incomplete);
-                            return;
+                            return batch;
                         }
                     }
                     else {
                         if (newval === null) {
                             if (oldval === null) {
                                 dbgEvt("Not notifying %s:value both are nulls", this.path);
-                                return;
+                                return batch;
                             }
                         }
                         else if (newval === undefined) {
@@ -780,18 +817,15 @@ var __extends = (this && this.__extends) || function (d, b) {
                         else {
                             if (newval == oldval) {
                                 dbgEvt("Not notifying %s:value both are same", this.path);
-                                return;
+                                return batch;
                             }
                         }
                     }
                 }
-                var event = [new RDb3Snap(newval, this.root, this.path), null];
-                for (var i = 0; i < valueHandlers.length; i++) {
-                    var cb = valueHandlers[i];
-                    dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
-                    cb.callback.apply(this.root, event);
-                }
+                var event = [new RDb3Snap(newval, this.root, this.path), null, 0];
+                batch.events.value.push(event);
             }
+            return batch;
         };
         Subscription.prototype.findByType = function (evtype) {
             return this.cbs.filter(function (ocb) { return ocb.eventType == evtype; });
@@ -872,7 +906,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             setPrototypeOf(mynewval, myoldval);
             this.myData = mynewval;
             // Forward to super.checkHandlers using my meta and my values
-            _super.prototype.checkHandlers.call(this, this.myMeta, this.myData, myoldval, mymodifieds, force);
+            var batch = _super.prototype.checkHandlers.call(this, this.myMeta, this.myData, myoldval, mymodifieds, force);
             // Remove elements if they are too much
             if (this.limit && this.myMeta.sorted.length > this.limit) {
                 var ks = this.myMeta.sorted;
@@ -889,8 +923,9 @@ var __extends = (this && this.__extends) || function (d, b) {
                 setPrototypeOf(remval, mynewval);
                 this.myData = remval;
                 // Delegate all event stuff to usual method
-                _super.prototype.checkHandlers.call(this, this.myMeta, this.myData, mynewval, remkeys, false);
+                batch.merge(_super.prototype.checkHandlers.call(this, this.myMeta, this.myData, mynewval, remkeys, false));
             }
+            return batch;
         };
         QuerySubscription.prototype.markDone = function () {
             this.myMeta.incomplete = false;

@@ -1,14 +1,29 @@
 /**
- * TSDB remote client 20160927_172424_master_1.0.0_ba17ad0
+ * TSDB remote client 20160927_233748_master_1.0.0_6825c2c
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
+export declare class EventsBatch {
+    subscription: Subscription;
+    constructor(subscription: Subscription);
+    events: {
+        child_added: any[][];
+        child_removed: any[][];
+        child_changed: any[][];
+        child_moved: any[][];
+        value: any[][];
+    };
+    merge(other: EventsBatch): void;
+    send(toValue?: boolean): void;
+}
 export declare class MergeState {
     writeVersion: number;
     deepInspect: boolean;
     insideComplete: boolean;
     highest: number;
+    batches: EventsBatch[];
     derive(): MergeState;
+    sendEvents(): void;
 }
 export interface SortResult {
     prev?: string;
@@ -86,7 +101,7 @@ export declare class Subscription {
     remove(cb: Handler): void;
     subscribe(): void;
     unsubscribe(): void;
-    checkHandlers(meta: Metadata, newval: any, oldval: any, modified: string[], force: boolean): void;
+    checkHandlers(meta: Metadata, newval: any, oldval: any, modified: string[], force: boolean): EventsBatch;
     findByType(evtype: string): Handler[];
     getCurrentValue(): any;
     getCurrentMeta(): Metadata;
@@ -110,7 +125,7 @@ export declare class QuerySubscription extends Subscription {
     getCurrentValue(): any;
     getCurrentMeta(): Metadata;
     findByType(evtype: string): Handler[];
-    checkHandlers(meta: Metadata, newval: any, oldval: any, modified: string[], force: boolean): void;
+    checkHandlers(meta: Metadata, newval: any, oldval: any, modified: string[], force: boolean): EventsBatch;
     markDone(): void;
     queryExit(path: string): void;
     makeSorter(): SortFunction;
