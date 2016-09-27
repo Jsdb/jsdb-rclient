@@ -6,12 +6,110 @@
 import {Spi,Api} from 'jsdb';
 
 type BroadcastCb = (sub :Subscription, acpath :string, acval:any)=>void;
+export type SortFunction = (a: any, b: any) => number;
 
-export interface WritingState {
-    version? :number;
-    incomplete? :boolean;
-    hasChildChanged? :boolean;
-} 
+export class MergeState {
+    writeVersion = 0;
+    deepInspect = false;
+    insideComplete = false;
+    highest = 0;
+
+    derive() {
+        var ret = new MergeState();
+        ret.writeVersion = this.writeVersion;
+        ret.deepInspect = this.deepInspect;
+        ret.insideComplete = this.insideComplete;
+        ret.highest = this.highest;
+        return ret;
+    }
+
+}
+
+export interface SortResult {
+    prev? :string;
+    actual? :string;
+    index? :number;
+}
+
+export class Metadata {
+    versions :{[index:string]:number} = {};
+    sorted :string[] = [];
+    highest = 0;
+    incomplete :boolean = null;
+
+    binaryIndexOf(key :string, compare? :SortFunction, arr = this.sorted) :[boolean,number] {
+        if (!compare) compare = (a,b) => {
+            return (a<b) ? -1 : (a==b) ? 0 : 1;
+        }
+        var min = 0;
+        var max = arr.length - 1;
+        var guess :number;
+    
+        var c = 0; 
+        while (min <= max) {
+            guess = Math.floor((min + max) / 2);
+    
+            c = compare(arr[guess],key);
+            if (c === 0) {
+                return [true, guess];
+            } else {
+                if (c < 0) {
+                    min = guess + 1;
+                } else {
+                    max = guess - 1;
+                }
+            }
+        }
+        return [false, c<0 ? guess+1 : guess];
+    }
+
+    modifySorted(modifieds :string[], added :boolean[], compare? :SortFunction) :SortResult[] {
+        var ret :SortResult[] = [];
+
+        // Find old positions for all non removed elements
+        for (var i = 0; i < modifieds.length; i++) {
+            if (added[i] === false) {
+                ret[i] = {};
+                continue;
+            }
+            var io = this.sorted.indexOf(modifieds[i]);
+            if (io == -1) {
+                ret[i] = {prev: null};
+            } else {
+                ret[i] = {prev: this.sorted[io-1]};
+            }
+        }
+
+        // Remove all elements
+        for (var i = 0; i < modifieds.length; i++) {
+            var io = this.sorted.indexOf(modifieds[i]);
+            if (io == -1) continue;
+            this.sorted.splice(io, 1);
+            // TODO eventually add to ret what needed for a child_moved
+        }
+
+        // Add new (or modified) elements
+        for (var i = 0; i < modifieds.length; i++) {
+            if (added[i] === false) continue;
+            var fnd = this.binaryIndexOf(modifieds[i], compare)
+            if (fnd[0]) continue;
+            this.sorted.splice(fnd[1],0,modifieds[i]);
+            // TODO we already know the position here, but it could change because of other adds
+        }
+
+        // Now compute new positions
+        for (var i = 0; i < modifieds.length; i++) {
+            if (added[i] === false) continue;
+            var fnd = this.binaryIndexOf(modifieds[i], compare)
+            if (!fnd[0]) continue;
+            ret[i].actual = this.sorted[fnd[1]-1] || null;
+            ret[i].index = fnd[1];
+        }
+
+        return ret;
+    }
+}
+
 
 export interface Socket {
     id :string;
@@ -51,7 +149,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
     constructor(private sock :Socket, private baseUrl :string) {
         dbgRoot('Building root %s for socket %s', baseUrl, sock?sock.id:'NONE');
         this.data = {};
-        markIncomplete(this.data);
+        this.getOrCreateMetadata('').incomplete = true;
         if (sock) {
             sock.on('v', (msg:any)=>this.receivedValue(msg));
             sock.on('qd', (msg:any)=>this.receivedQueryDone(msg));
@@ -60,8 +158,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     private subscriptions :{[index:string]:Subscription} = {};
-    private data :any;
     private queries :{[index:string]:QuerySubscription} = {};
+
+    private metadata :{[index:string]:Metadata} = {};
+    private data :any;
 
     private doneProm :Promise<any> = null;
 
@@ -115,26 +215,21 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     receivedValue(msg :any) {
         dbgIo('Received Value v %s for "%s" : %o', msg.n, msg.p, msg);
-        this.handleChange(msg.p, msg.v, msg.n);
-        if (msg.q) {
-            var val = msg.v;
-            this.handleQueryChange(msg.q, msg.p, val, msg.n);
-        }
+        this.handleChange(msg.p, msg.v, msg.n, msg.q);
     }
 
     receivedQueryDone(msg :any) {
         dbgIo('Received QueryDone for %s : %o', msg.q, msg);
         var qdef = this.queries[msg.q];
         if (!qdef) return;
-        qdef.done = true;
-        this.handleQueryChange(msg.q, qdef.path, {$i:true,$d:true}, this.writeProg);
+        qdef.markDone();
     }
 
     receivedQueryExit(msg :any) {
         dbgIo('Received QueryExit v %s for "%s" : %o', msg.n, msg.q, msg);
         var qdef = this.queries[msg.q];
         if (!qdef) return;
-        this.handleQueryChange(msg.q, msg.p, null, msg.n);
+        qdef.queryExit(msg.p);
     }
 
     send(...args :any[]) {
@@ -194,6 +289,15 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     unsubscribe(path :string) {
         delete this.subscriptions[path];
+        /*
+        var md = this.root.find(path);
+        if (!md) return;
+        md.subscription = null;
+        */
+
+        // TODO reimplement unsub policy
+        /*
+        delete this.subscriptions[path];
 
         var sp = splitUrl(path);
         var ch = findChain(sp, this.data);
@@ -221,7 +325,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 markIncomplete(ac);
             }
         }
-
+        */
 
         // TODO what is below is suboptimal
         /*
@@ -256,6 +360,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         */
     }
 
+    /*
     private recursiveClean(path :string, val :any) {
         if (typeof(val) !== 'object') return;
         if (val === KNOWN_NULL) return;
@@ -269,6 +374,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             this.recursiveClean(subp, val[k]);
         }
     }
+    */
 
     subscribeQuery(query :QuerySubscription) {
         this.queries[query.id] = query;
@@ -279,7 +385,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         this.sendUnsubscribeQuery(id);
         delete this.queries[id];
         delete this.subscriptions['/q' + id];
-        delete this.data['q' + id];
+        //delete this.data['q' + id];
     }
 
     getValue(url: string | string[]) :any {
@@ -287,7 +393,58 @@ export class RDb3Root implements Spi.DbTreeRoot {
         return ret.pop();
     }
 
-    handleChange(path :string, val :any, prog :number) {
+    getOrCreateMetadata(path :string, initing = true) :Metadata {
+        var ret = this.metadata[path];
+        if (!ret) {
+            ret = new Metadata();
+            if (initing) {
+                var parent = this.getNearestMetadata(path);
+                if (parent) {
+                    ret.incomplete = parent.incomplete;
+                    ret.highest = parent.highest;
+                }
+            }
+            this.metadata[path] = ret;
+            dbgRoot("Created new metadata for %s", path);
+        }
+        return ret;
+    }
+
+    getMetadata(path :string) :Metadata {
+        return this.metadata[path];
+    }
+
+    getNearestMetadata(path :string) :Metadata {
+        var ret :Metadata = this.metadata[path];
+        if (ret) {
+            dbgRoot("Nearest metadata to %s is itself : %o", path, ret);
+            return ret;
+        }
+        var fndpath :string = null;
+        var acl :number = -1;
+        for (var k in this.metadata) {
+            if (path.indexOf(k) == 0) {
+                if (k.length > acl) {
+                    acl = k.length;
+                    fndpath = k;
+                    ret = this.metadata[k];
+                }
+            }
+        }
+        dbgRoot("Nearest metadata to %s is %s : %o", path, fndpath, ret);
+        return ret;
+    }
+
+    handleChange(path :string, val :any, prog :number, queryId? :string) {
+        dbgRoot("Handling change on %s for prog %s (query %s)", path, prog, queryId);
+        var querySub :QuerySubscription = null;
+        if (queryId) {
+            querySub = this.queries[queryId];
+            if (!querySub) {
+                // Stale query TODO send unsub again?
+            }
+        }
+
         // Normalize the path to "/" by wrapping the val
         var nv :any = val;
         var sp = splitUrl(path);
@@ -295,40 +452,26 @@ export class RDb3Root implements Spi.DbTreeRoot {
         while (sp.length) {
             var nnv :any = {};
             nnv[sp.pop()] = nv;
-            markIncomplete(nnv);
+            nnv.$i = true;
             nv = nnv;
         }
 
-        this.recurseApplyBroadcast(nv, this.data, null, '', prog, {});
+        var state = new MergeState();
+        state.writeVersion = prog;
+        this.merge('', nv, this.data, state, querySub);
 
         this.data = nv;
 
         // Special case for root
         if (val == null && path == '') {
             this.data = {};
+            this.metadata = {};
+            this.getOrCreateMetadata('').incomplete = false;
         }
-
-        /*
-        if (val == null) {
-            // Special case for root
-            if (path == '') {
-                this.data = {};
-            } else {
-                var ch = findChain(sp, this.data);
-                // .. Recurses up, remove any key that results in an empty object
-                for (var i = ch.length - 1; i > 0; i--) {
-                    var ac = ch[i];
-                    var par = ch[i-1];
-                    var inpname = sp[i];
-                    if (typeof(ac) === 'object' && Utils.isEmpty(ac)) {
-                        delete par[inpname];
-                    }
-                }
-            }
-        }
-        */
     }
 
+    // TODO rewrite this completely
+    /*
     handleQueryChange(id :string, path :string, val :any, prog :number) {
         var def = this.queries[id];
         if (!def) {
@@ -342,7 +485,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         while (sp.length) {
             var nnv :any = {};
             nnv[sp.pop()] = nv;
-            markIncomplete(nnv);
+            nnv.$i = true;
             nv = nnv;
         }
         nv.$l = !def.done;
@@ -352,303 +495,168 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
         var fnv :any = {};
         fnv['q' + id] = nv;
-        markIncomplete(fnv);
+        fnv.$i = true;
 
-        // TODO what to pass here as a parentval??
-        this.recurseApplyBroadcast(nv, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+        var state = new MergeState();
+        state.writeVersion = prog;
+        this.merge('/q' + id, nv, this.data['q'+id], state);
 
         delete nv.$l;
         this.data = fnv;
 
         if (def.limit) {
             var acdata = this.data['q'+id];
-            var ks = getKeysOrdered(acdata);
+            // TODO replace with query metadata
+            var ks = Object.keys(acdata); // getKeysOrdered(acdata);
             if (ks.length > def.limit) {
                 var torem :any = {};
                 while (ks.length > def.limit) {
                     var k = def.limitLast ? ks.shift() : ks.pop();
                     torem[k] = null;
                 }
-                markIncomplete(torem);
+                torem.$i = true;
+
                 fnv = {};
                 fnv['q' + id] = torem;
-                markIncomplete(fnv);
+                fnv.$i = true;
                 // TODO what to pass here as a parentval??
                 // TODO probably here the sversion should not be prog, given that the deletion are based on the current situation
-                this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+                this.merge('/q' + id, torem, this.data['q'+id], state);
+                //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
                 this.data = fnv;
             }
         }
     }
+    */
 
-    recurseApplyBroadcast(newval :any, acval :any, parentval :any, path :string, version :number, state :WritingState, queryPath? :string) :boolean {
-        var leaf = Utils.leafPath(path);
+    merge(path :string, newval :any, oldval :any, state :MergeState, querySub? :QuerySubscription) {
+        var sub = this.subscriptions[path];
+        var atQuery = querySub && (path == querySub.path);
         if (newval !== null && typeof(newval) === 'object') {
-            var newValIncomplete = isIncomplete(newval);
-            var changed = false;
-            // Change from native value to object
-            if (acval === KNOWN_NULL || !acval || typeof(acval) !== 'object') {
-                // it is not yet changed : suppose it is /par/par/val : null, with current data empty, creating the two par should not 
-                // trigger anything until one leaf value is set, and set to something valuable
-                //changed = true;
-                acval = {};
-                /*
-                if (newValIncomplete) {
-                    markIncomplete(acval);
-                }
-                parentval[leaf] = acval;
-                */
-            } else {
-                // A complete value arrived, previous one was icomplete, so mark it as explicitly complete and trigger value event if any
-                if (!newValIncomplete && isIncomplete(acval, state)) {
-                    newval.$i = false;
-                    changed = true;
-                }
+            // We are handling a modification object
+            var meta = this.getOrCreateMetadata(path, false);
 
-                // An incomplete new value arrived, but previous one was complete, so this is a partial update, mark it as explicitly complete but no trigger
-                if (newValIncomplete && !isIncomplete(acval, state)) {
-                    newval.$i = false;
-                }
+            // Find versions, stored on the parent to accomodate leaf native values
 
+            // Check/update the highest version
+            var preHighest = meta.highest;
+            if (state.writeVersion > preHighest) {
+                meta.highest = state.writeVersion;
             }
+            preHighest = preHighest || state.highest;
 
-            var acversions = getVersions(acval);
-            var preHigher = acversions.$higher || 0;
-            if (version > preHigher) {
-                acversions.$higher = version;
+            var wasIncomplete = meta.incomplete;
+            if (meta.incomplete || meta.incomplete === null) {
+                if (state.insideComplete) {
+                    meta.incomplete = false;
+                } else {
+                    meta.incomplete = !!newval.$i;
+                }
             }
-
-            var sub = this.subscriptions[path];
-            if (!state.hasChildChanged && !sub && !newValIncomplete && preHigher < version) {
+ 
+            // Check if we can shortcut
+            if (!state.deepInspect && !sub && !atQuery && !newval.$i && preHighest <= state.writeVersion) {
+                // Look for subscriptions in children and below
                 var hasGrandSubs = false;
                 for (var k in this.subscriptions) {
                     if (k.indexOf(path) == 0) {
                         if (path == k) continue;
                         hasGrandSubs = true;
+                        break;
                     }
                 }
                 if (!hasGrandSubs) {
-                    //Object.setPrototypeOf(newval, acval);
-                    return true;
-                    /*
-                    if (parentval) {
-                        parentval[leaf] = newval;
-                    } else {
-                        for (var k in newval) {
-                            acval[k] = newval[k]
-                        }
-                        for (var k in acval) {
-                            if (typeof(newval[k]) !== 'undefined') continue;
-                            delete acval[k];
+                    // We satisfied the conditions for a shortcut, that is 
+                    // 1) We are not looking (or not looking anymore) for a child_changed, so don't need to inspect deeply
+                    // 2) There is no subscriptions to notify in this branch of the tree
+                    // 3) The value we are setting is complete, so it replace all this branch of the tree
+                    // 4) The current writing version is higher or equal to the highest version seen in this branch of the tree
+                    // So, nothing to do here, the new value replaces the old one in the prorotype chain and that's it
+
+                    // Delete children metas, cause they're stale now
+                    for (var k in this.metadata) {
+                        if (k.indexOf(path) == 0) {
+                            if (path == k) continue;
+                            delete this.metadata[k];
                         }
                     }
+
                     return true;
-                    */
                 }
             }
 
-            // Look children of the new value
-            var nks = sub ? getKeysOrdered(newval) : Object.keys(newval);
-            for (var nki = 0; nki < nks.length; nki++) {
-                var k = nks[nki];
+            // If we have a child_changed or child_moved, we need so set the deepInspect
+            var substate = state.derive();
+            substate.deepInspect = substate.deepInspect || sub && !!(sub.types['child_changed'] || sub.types['child_moved']);
+            substate.deepInspect = substate.deepInspect || (atQuery && !!(querySub.types['child_changed'] || querySub.types['child_moved']));
+
+            substate.insideComplete = meta.incomplete === false;
+            substate.highest = preHighest;
+
+            // Check what we have to clean and what to update based on versions, then send it recursively
+            var modifieds :string[] = [];
+            for (var k in newval) {
                 if (k.charAt(0) == '$') continue;
-
-                var newc = newval[k];
-                var pre = acval[k];
-                var prever = acversions[k] || state.version;
-
-
-                dbgRoot("%s comparing prever %s->%s : %s->%s", path+'/'+k, prever, version,pre,newc);
-                if (prever && prever > version) {
-                    // Version conflict, update new data with old data :)
+                if (meta.versions[k] > state.writeVersion) {
+                    // Current version is newer than the write version, delete the write
                     delete newval[k];
-                    continue;
-                }
-
-                var acstate :WritingState = {
-                    version: prever,
-                    incomplete: isIncomplete(acval, state),
-                    hasChildChanged: state.hasChildChanged
-                };
-                
-                if (!isIncomplete(newc)) {
-                    acversions[k] = version;
-                }
-                if (newc === null) {
-                    // Explicit delete
-                    var presnap = new RDb3Snap(pre, this, (queryPath||path)+'/'+k);
-                    if (this.recurseApplyBroadcast(newc, pre, newval, path +'/'+k, version, acstate)) {
-                        if (sub && sub.types['child_removed']) {
-                            this.broadcastChildRemoved(path, k, presnap, queryPath);
-                        }
-                        // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
-                        //this.broadcastChildMoved(path, k, acval[k]);
-                        // If we are in a query, really remove the child, no need for KNOWN_NULL
-                        //if (queryPath) delete acval[k];
-                        changed = true;
-                    }
-                } else if (pre === KNOWN_NULL || typeof(pre) === 'undefined') {
-                    // Child added
-                    //pre = {};
-                    /*
-                    if (isIncomplete(newc)) {
-                        markIncomplete(pre);
-                    }
-                    acval[k] = pre;
-                    */
-                    if (this.recurseApplyBroadcast(newc, null, newval, path +'/'+k, version, acstate)) {
-                        changed = true;
-                        if (sub && sub.types['child_added']) {
-                            this.broadcastChildAdded(path, k, newc, queryPath, ()=>findPreviousKey(newval, k, acval));
-                        }
-                        /*
-                    } else {
-                        delete acval[k];
-                        */
-                    }
                 } else {
-                    // Maybe child changed
-                    var prepre :string = null;
-                    if (sub && sub.types['child_moved']) {
-                        prepre = findPreviousKey(acval, k);
+                    // If the child is complete, we can update its version
+                    if (newval[k] && !newval[k].$i) {
+                        meta.versions[k] = state.writeVersion;
                     }
-                    var preHasChildChanged = acstate.hasChildChanged;
-                    if (sub) {
-                        acstate.hasChildChanged = acstate.hasChildChanged || !!sub.types['child_changed'];
-                    }
-                    if (this.recurseApplyBroadcast(newc, pre, newval, path+'/'+k, version, acstate)) {
-                        changed = true;
-                        // Consider sorting and previous key
-                        if (sub && (sub.types['child_moved'] || sub.types['child_changed'])) {
-                            var acpre = findPreviousKey(newval, k, acval);
-                            this.broadcastChildChanged(path, k, newc, queryPath, ()=>acpre);
-                            if (prepre && prepre != acpre) {
-                                this.broadcastChildMoved(path, k, newc, queryPath, ()=>acpre);
-                            }
+                    if (this.merge(path + '/' + k, newval[k], oldval ? oldval[k] : null, substate, querySub)) {
+                        modifieds.push(k);
+                        if (newval[k] === null) {
+                            //meta.knownNull = true;
+                            newval[k] = undefined;
+                            // TODO KNOWN_NULL is nother thing to clean up from snapshot.val, try to find another way
+                            //newval[k] = KNOWN_NULL;
                         }
                     }
-                    acstate.hasChildChanged = preHasChildChanged;
                 }
             }
-            if (!newValIncomplete) {
-                // If newc is not incomplete, delete all the other children
-                for (var k in acval) {
+
+            // If the new object is complete, nullify previously existing keys that are not found now
+            if (!newval.$i) {
+                for (var k in oldval) {
                     if (k.charAt(0) == '$') continue;
-                    if (newval[k] === null || typeof(newval[k]) === 'undefined') {
-                        var prever = acversions[k];
-                        if (prever && prever > version) {
-                            // Version conflict, update new data with old data :)
-                            delete newval[k];
-                            continue;
-                        }
-                        var pre = acval[k];
-                        acversions[k] = version;
-                        var presnap :RDb3Snap = null;
-                        if (sub && sub.types['child_removed']) {
-                            presnap = new RDb3Snap(pre, this, (queryPath || path) + '/' + k);
-                        }
-                        if (this.recurseApplyBroadcast(null, pre, newval, path +'/'+k, version, acstate)) {
-                            if (sub && sub.types['child_removed']) {
-                                this.broadcastChildRemoved(path, k, presnap, queryPath);
-                            }
-                            // TODO consider sorting and previous key, removing an element makes the next one to move "up" in the list
-                            //this.broadcastChildMoved(path, k, acval[k]);
-                            changed = true;
-                        }
+                    var prever = meta.versions[k];
+                    if (prever && prever > state.writeVersion) {
+                        // Version conflict, update new data with old data :)
+                        delete newval[k];
+                        continue;
+                    }
+                    if (oldval[k] && !(k in newval)) {
+                        newval[k] = undefined;
+                        modifieds.push(k);
                     }
                 }
             }
+            
+            delete newval.$i;
 
-            if (newval && acval) {
-                // Preserve completeness by marking it explicitly
-                if (!('$i' in newval)) newval.$i = newValIncomplete;
-
-                Object.setPrototypeOf(newval, acval);
+            if (oldval) {
+                Object.setPrototypeOf(newval, oldval);
             }
 
-            if ((changed && !newval.$l && !isIncomplete(newval, state)) || newval.$d) {
-                if (sub && sub.types['value']) {
-                    this.broadcastValue(path, newval, queryPath);
-                }
+            // TODO if this passed from incomplete to complete, then it is CHANGED and should trigger events
+            var forceModified = meta.incomplete === false && wasIncomplete !== false; 
+
+            if (sub) {
+                sub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
             }
-            /*
-            for (var k in acval) {
-                if (acval[k] !== KNOWN_NULL) return changed;
-                if (this.subscriptions[path+'/'+k]) return changed;
+            if (atQuery) {
+                querySub.checkHandlers(meta, newval, oldval, modifieds, forceModified);
             }
-            if (parentval) {
-                delete parentval[leaf];
-            } else {
-                this.data = {};
-            }
-            */
-            return changed;
+
+            return !!modifieds.length;
         } else {
-            if (!parentval || !leaf) {
-                // This happens when root is set to null
-                this.broadcastValue(path, newval, queryPath);
-                return true;
-            }
-            if (newval === null) {
-                if (queryPath) {
-                    // If in a query, don't use known nulls
-                    if (acval != null) {
-                        parentval[leaf] = undefined;
-                        this.broadcastValue(path, null, queryPath);
-                        return true;
-                    }
-                } else {
-                    if (acval != KNOWN_NULL) {
-                        // keep "known missings", to avoid broadcasting this event over and over if it happens
-                        parentval[leaf] = KNOWN_NULL;
-                        this.broadcastValue(path, KNOWN_NULL, queryPath);
-                        return !!acval;
-                    }
-                }
-                // TODO propagate the nullification downwards to raise events on children, if any
-            } else if (acval != newval) {
-                //parentval[leaf] = newval;
-                this.broadcastValue(path, newval, queryPath);
-                return true;
-            }
-            return false;
-        }
-    }
-
-    private resolveChildName(prevChildName :()=>string) {
-
-    }
-
-    broadcastValue(path :string, val :any, queryPath :string) {
-        this.broadcast(path, 'value', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, queryPath || path));
-    }
-
-    broadcastChildAdded(path :string, child :string, val :any, queryPath :string, prevChildName? :()=>string) {
-        this.broadcast(path, 'child_added', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, (queryPath || path)+'/'+child), prevChildName);
-    }
-
-    broadcastChildChanged(path :string, child :string, val :any, queryPath :string, prevChildName? :()=>string) {
-        this.broadcast(path, 'child_changed', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, (queryPath || path)+'/'+child), prevChildName);
-    }
-
-    broadcastChildMoved(path :string, child :string, val :any, queryPath :string, prevChildName? :()=>string) {
-        this.broadcast(path, 'child_moved', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, (queryPath || path)+'/'+child), prevChildName);
-    }
-
-    broadcastChildRemoved(path :string, child :string, val :any, queryPath :string) {
-        this.broadcast(path, 'child_removed', ()=>val instanceof RDb3Snap ? val : new RDb3Snap(val, this, (queryPath || path)+'/'+child));
-    }
-
-    broadcast(path :string, type :string, snapProvider :()=>RDb3Snap, prevChildName? :()=>string) {
-        var sub = this.subscriptions[path];
-        if (!sub) return;
-        var handlers = sub.findByType(type);
-        if (handlers.length == 0) return;
-        var snap = snapProvider();
-        dbgEvt('Send event %s %s:%o to %s handlers', path, type, <any>snap['data'], handlers.length);
-        for (var i = 0; i < handlers.length; i++) {
-            dbgEvt('%s sent event %s %s', handlers[i]._intid, path, type);
-            handlers[i].callback(snap, prevChildName ? prevChildName() : null);
+            // We are handling a leaf value
+            if (sub) sub.checkHandlers(null, newval, oldval, null, false);
+            // TODO this should never happen, value of a query with a single leaf primitive value??
+            if (atQuery) querySub.checkHandlers(null, newval, oldval, null, false);
+            return newval != oldval;
         }
     }
 
@@ -673,7 +681,9 @@ if (glb || typeof(require) !== 'undefined') {
     try {
         var TsdbImpl = glb['Tsdb'] || require('jsdb');
         TsdbImpl.Spi.registry['rclient'] = RDb3Root.create;
-    } catch (e) {}
+    } catch (e) {
+        console.log(e);
+    }
 }
 
 
@@ -693,17 +703,17 @@ export class Subscription {
     private needSubscribe = false;
 
     add(cb: Handler) {
-        dbgEvt("Adding handler %s from %s", cb._intid, this.path);
-        if (this.cbs.length == 0) this.subscribe();
+        dbgEvt("Adding handler %s %s to %s", cb._intid, cb.eventType, this.path);
         this.cbs.push(cb);
         this.types[cb.eventType] = (this.types[cb.eventType] || 0) + 1; 
+        if (this.cbs.length == 1) this.subscribe();
     }
 
     remove(cb: Handler) {
         this.cbs = this.cbs.filter((ocb) => ocb !== cb);
-        dbgEvt("Removed handler %s from %s", cb._intid, this.path);
-        if (this.cbs.length == 0) this.unsubscribe();
+        dbgEvt("Removed handler %s %s from %s", cb._intid, cb.eventType, this.path);
         this.types[cb.eventType] = (this.types[cb.eventType] || 1) - 1; 
+        if (this.cbs.length == 0) this.unsubscribe();
     }
 
     subscribe() {
@@ -733,6 +743,98 @@ export class Subscription {
         });
     }
 
+    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) {
+        if (meta) {
+            // Update the metadata with current keys
+            var added :boolean[] = [];
+            for (var i = 0; i < modified.length; i++) {
+                var k = modified[i];
+                if (oldval && typeof(oldval[k]) !== 'undefined') {
+                    if (!newval || typeof(newval[k]) === 'undefined') {
+                        added[i] = false;
+                    }
+                } else if (newval && typeof(newval[k]) !== 'undefined') {
+                    added[i] = true;
+                }
+            }
+
+            var sortchange = meta.modifySorted(modified, added, this.makeSorter());
+
+            // Build proper events for each event type
+            // TODO we could do this only if there is someone listening and save few cpu ticks
+            var handlerParams = {
+                child_added : <any[][]>[],
+                child_removed : <any[][]>[],
+                child_changed : <any[][]>[],
+                child_moved : <any[][]>[]
+            };
+
+            for (var i = 0; i < modified.length; i++) {
+                var k = modified[i];
+                if (added[i] === true) {
+                    handlerParams.child_added.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                } else if (added[i] === false) {
+                    handlerParams.child_removed.push([new RDb3Snap(oldval[k], this.root, this.path + '/' + k),null,0]);
+                } else {
+                    handlerParams.child_changed.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                    if (sortchange[i].prev != sortchange[i].actual) {
+                        handlerParams.child_moved.push([new RDb3Snap(newval[k], this.root, this.path + '/' + k), sortchange[i].actual, sortchange[i].index]);
+                    }
+                }
+            }
+
+            // Dispatch the events to the handlers
+            for (var i = 0; i < this.cbs.length; i++) {
+                var cb = this.cbs[i];
+                var events = <any[][]>(<any>handlerParams)[cb.eventType];
+                if (events) {
+                    // Sort events
+                    events.sort((eva:any,evb:any)=>{
+                        return eva[2] < evb[2] ? -1 : eva[2] == evb[2] ? 0 : 1;
+                    });
+                    for (var j = 0; j < events.length; j++) {
+                        events[j].splice(2,1);
+                        dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
+                        cb.callback.apply(this.root, events[j]);
+                    }
+                }
+            }
+        }
+
+        // Send value last
+        var valueHandlers = this.findByType('value');
+        if (valueHandlers.length) {
+            if (!force) {
+                if (newval && typeof(newval) === 'object') {
+                    if ((!modified || modified.length == 0) || meta.incomplete) {
+                        dbgEvt("Not notifying %s:value because modified %s or incomplete %s", this.path, modified && modified.length, meta.incomplete);
+                        return;
+                    }
+                } else {
+                    if (newval === null) {
+                        if (oldval === null) {
+                            dbgEvt("Not notifying %s:value both are nulls", this.path);
+                            return;
+                        }
+                    } else if (newval === undefined) {
+                        // Always broadcast an explicit undefined
+                    } else {
+                        if (newval == oldval) {
+                            dbgEvt("Not notifying %s:value both are same", this.path);
+                            return;
+                        }
+                    }
+                }
+            }
+            var event = [new RDb3Snap(newval, this.root, this.path), null];
+            for (var i = 0; i < valueHandlers.length; i++) {
+                var cb = valueHandlers[i];
+                dbgEvt("Dispatching event %s:%s to %s", this.path, cb.eventType, cb._intid);
+                cb.callback.apply(this.root, event);
+            }
+        }
+    }
+
     findByType(evtype :string) :Handler[] {
         return this.cbs.filter((ocb)=>ocb.eventType==evtype);
     }
@@ -741,7 +843,172 @@ export class Subscription {
         return this.root.getValue(this.path);
     }
 
+    getCurrentMeta() {
+        return this.root.getOrCreateMetadata(this.path);
+    }
+
+    makeSorter() :SortFunction {
+        return null;
+    }
+
 }
+
+
+
+var progQId = 1;
+
+export class QuerySubscription extends Subscription {
+    id: string = (progQId++)+'a';
+
+    compareField: string = null;
+    from: string | number;
+    to: string | number;
+    equals: string | number;
+    limit: number = null;
+    limitLast = false;
+
+    //done = false;
+
+    myData :any = {};
+    myMeta :Metadata = new Metadata();
+
+    constructor(oth: Subscription | QuerySubscription) {
+        super(oth.root, oth.path);
+        this.myMeta.incomplete = true;
+        if (oth instanceof QuerySubscription) {
+            this.compareField = oth.compareField;
+            this.from = oth.from;
+            this.to = oth.to;
+            this.equals = oth.equals;
+            this.limit = oth.limit;
+            this.limitLast = oth.limitLast;
+        }
+    }
+
+    add(cb: Handler) {
+        super.add(cb);
+    }
+
+    remove(cb: Handler) {
+        super.remove(cb);
+    }
+
+    subscribe() {
+        this.root.subscribeQuery(this);
+        this.root.sendSubscribeQuery(this);
+    }
+
+    unsubscribe() {
+        this.root.unsubscribeQuery(this.id);
+    }
+
+    getCurrentValue() {
+        return this.myData;
+    }
+
+    getCurrentMeta() {
+        return this.myMeta;
+    }
+
+    // Trick into thinking there is no value handler if query is not finished yet
+    findByType(evtype :string) :Handler[] {
+        if (evtype == 'value' && this.myMeta.incomplete) return [];
+        return super.findByType(evtype);
+    }
+
+
+    // We handle this a bit differently for queries
+    checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) {
+        // Copy from new val to my new val, only own values
+        var mynewval :any = {};
+        // TODO maybe use modified?
+        var nks = Object.getOwnPropertyNames(newval);
+        var mymodifieds :string[] = [];
+        for (var i = 0; i < nks.length; i++) {
+            var k = nks[i];
+            mynewval[k] = newval[k];
+            mymodifieds.push(k);
+        }
+
+        // Make my new val extend my old val
+        var myoldval = this.myData;
+        Object.setPrototypeOf(mynewval, myoldval);
+        this.myData = mynewval;
+
+        // Forward to super.checkHandlers using my meta and my values
+        super.checkHandlers(this.myMeta, this.myData, myoldval, mymodifieds, force);
+
+        // Remove elements if they are too much
+        if (this.limit && this.myMeta.sorted.length > this.limit) {
+            var ks = this.myMeta.sorted;
+            // How many to remove
+            var toremove = ks.length - this.limit;
+
+            // Find the keys to remove
+            var remkeys = this.limitLast ? ks.slice(0,toremove) : ks.slice(-toremove);
+
+            // Create a new value with k->undefined
+            var remval :any = {};
+            for (var i = 0; i < remkeys.length; i++) {
+                remval[remkeys[i]] = undefined;
+            }
+
+            // The remove value extends the new valuefrom previous steps, and becomes the new data 
+            Object.setPrototypeOf(remval, mynewval);
+            this.myData = remval;
+
+            // Delegate all event stuff to usual method
+            super.checkHandlers(this.myMeta, this.myData, mynewval, remkeys, false);
+        }
+    }
+
+    markDone() {
+        this.myMeta.incomplete = false;
+        // Trigger value
+        var valueHandlers = this.findByType('value');
+        if (valueHandlers.length) {
+            var event = [new RDb3Snap(this.myData, this.root, this.path), null];
+            for (var i = 0; i < valueHandlers.length; i++) {
+                valueHandlers[i].callback.apply(this.root, event);
+            }
+        }
+    }
+
+    queryExit(path :string) {
+        var subp = path.substr(this.path.length);
+        var leaf = Utils.leafPath(subp);
+        var mynewval :any = {};
+        mynewval[leaf] = null;
+
+        // Make my new val extend my old val
+        var myoldval = this.myData;
+        Object.setPrototypeOf(mynewval, myoldval);
+        this.myData = mynewval;
+
+        // Forward to super.checkHandlers using my meta and my values
+        super.checkHandlers(this.myMeta, this.myData, myoldval, [leaf], false);
+    }
+
+    makeSorter() :SortFunction {
+        if (!this.compareField) return null;
+        return (ka :string,kb :string)=>{
+            var a = this.myData[ka];
+            var b = this.myData[kb];
+            // TODO should supports paths in compare fields?
+            var va = a[this.compareField];
+            var vb = b[this.compareField];
+            if (va > vb) return 1;
+            if (vb > va) return -1;
+            // Fall back to key order if compareField is equal
+            if (ka > kb) return 1;
+            if (kb > ka) return -1;
+            return 0;
+        };
+    }
+}
+
+
+
 
 export abstract class Handler {
     public _intid = 'h' + (prog++);
@@ -777,6 +1044,10 @@ export abstract class Handler {
         return this.tree.getSubscription().getCurrentValue();
     }
 
+    protected getMeta() :Metadata {
+        return this.tree.getSubscription().getCurrentMeta();
+    }
+
     abstract init() :void;
 }
 
@@ -788,9 +1059,21 @@ class ValueCbHandler extends Handler {
 
     init() {
         var acval = this.getValue();
-        if (acval !== null && typeof(acval) !== 'undefined' && !isIncomplete(acval)) {
-            dbgEvt('%s Send initial event %s value:%o', this._intid, this.tree.url, acval);
-            this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url));
+        var meta = this.getMeta();
+        var to = typeof(acval);
+        // Send initial data if ...
+        if (
+            // ... it's a primitive value
+            (to !== 'undefined' && to !== 'object')
+            // ... there is a metadata declaring it complete
+            || (meta && meta.incomplete === false)
+            // ... is an explicit null
+            || (acval === null)
+        ) {
+            dbgEvt('%s Send initial event %s : value %o', this._intid, this.tree.url, acval);
+            this.callback(new RDb3Snap(acval, this.tree.root, this.tree.url, meta));
+        } else {
+            dbgEvt('%s Not sending initial value event, incomplete %s typeof %s', this._intid, (meta && meta.incomplete), typeof(acval));
         }
     }
 }
@@ -803,10 +1086,10 @@ class ChildAddedCbHandler extends Handler {
 
     init() {
         var acv = this.getValue();
-        var mysnap = new RDb3Snap(acv, this.tree.root, this.tree.url);
+        var mysnap = new RDb3Snap(acv, this.tree.root, this.tree.url, this.getMeta());
         var prek :string = null;
         mysnap.forEach((cs)=>{
-            dbgEvt('%s Send initial event %s child_added:%o', this._intid, <any>cs['url'], <any>cs['data']);
+            dbgEvt('%s Send initial event %s : child_added  %o', this._intid, <any>cs['url'], <any>cs['data']);
             this.callback(cs,prek);
             prek = cs.key();
             return false;
@@ -869,26 +1152,8 @@ export class RDb3Snap implements Spi.DbTreeSnap {
         private data: any,
         private root: RDb3Root,
         private url: string,
-        reclone = true
+        private meta? :Metadata
     ) {
-        if (data === KNOWN_NULL) {
-            this.data = null;
-            /*
-        } else if (data != null && typeof (data) !== undefined && reclone) {
-            var str = JSON.stringify(data, (k,v)=>k.length && k.charAt(0) == '$' ? undefined : v);
-            if (str === undefined || str === 'undefined') {
-                this.data = undefined;
-            } else if (str === null || str === 'null') {
-                this.data = null;
-            } else {
-                this.data = JSON.parse(str);
-            }
-            
-            if (data['$sorter']) this.data['$sorter'] = data['$sorter'];
-            */
-        } else {
-            this.data = data;
-        }
     }
 
     exists(): boolean {
@@ -897,28 +1162,28 @@ export class RDb3Snap implements Spi.DbTreeSnap {
 
     val(): any {
         if (!this.exists()) return null;
-        return JSON.parse(JSON.stringify(this.data, (k,v)=>{
-            if (k.length && k.charAt(0) == '$') return undefined;
-            if (typeof(v) !== 'object') return v;
-            var tmp :any = {};
-            for(var key in v) {
-                var to = typeof v[key];
-                if(to !== 'function')
-                    tmp[key] = v[key];
-            }
-            return tmp;
-        }));
+        return this.data;
     }
     child(childPath: string): RDb3Snap {
         var subs = findChain(childPath, this.data, true, false);
-        return new RDb3Snap(subs.pop(), this.root, this.url + Utils.normalizePath(childPath), false);
+        var suburl = this.url + Utils.normalizePath(childPath);
+        var val = subs.pop();
+        return new RDb3Snap(val, this.root, suburl, typeof(val) === 'object' ? this.root.getMetadata(suburl) : null);
     }
 
-    // TODO ordering
     forEach(childAction: (childSnapshot: RDb3Snap) => void): boolean;
     forEach(childAction: (childSnapshot: RDb3Snap) => boolean): boolean {
         if (!this.exists()) return;
-        var ks = getKeysOrdered(this.data);
+        var ks :string[] = [];
+        if (this.meta) {
+            ks = this.meta.sorted;
+        }
+        if (!ks || !ks.length) {
+            for (var k in this.data) {
+                ks.push(k);
+            }
+            ks.sort();
+        }
         for (var i = 0; i < ks.length; i++) {
             var child = this.child(ks[i]);
             if (!child.exists()) continue;
@@ -937,8 +1202,10 @@ export class RDb3Snap implements Spi.DbTreeSnap {
 }
 
 
-type SortFunction = (a: any, b: any) => number;
 
+
+
+/*
 function getKeysOrdered(obj: any, fn?: SortFunction, otherObj? :any): string[] {
     if (!obj) return [];
     fn = fn || obj['$sorter'];
@@ -973,6 +1240,7 @@ function findPreviousKey(obj :any, k :string, otherObj? :any) :string {
     if (i<1) return null;
     return ks[i-1];
 }
+*/
 
 namespace Utils {
     export function normalizePath(path: string) {
@@ -1043,51 +1311,6 @@ function findChain<T>(url: string | string[], from: T, leaf = true, create = fal
     return ret;
 }
 
-function markIncomplete(obj :any) {
-    if (obj && typeof(obj) === 'object') {
-        obj['$i'] = true;
-        //Object.defineProperty(obj, '$i', {enumerable:false, configurable:true, value:true});
-    }
-}
-
-function markComplete(obj :any) {
-    obj.$i = false;
-    //Object.defineProperty(obj, '$i', {enumerable:false, value:false});
-}
-
-
-function isIncomplete(obj :any, state? :WritingState) :boolean {
-    return (obj && typeof(obj) === 'object') ? !!obj['$i'] : state ? state.incomplete : false;
-}
-
-function getVersions(obj :any) :any {
-    var ret = obj['$v'];
-    if (!ret) {
-        obj['$v'] = {};
-        //Object.defineProperty(obj, '$v', {enumerable:false, configurable:true, value:{}});
-        ret = obj['$v'];
-    }
-    return ret;
-}
-
-
-/*
-export var KNOWN_NULL = {};
-Object.defineProperty(KNOWN_NULL, 'toJSON', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>()=><any>undefined}); //, value:()=><any>undefined});
-Object.defineProperty(KNOWN_NULL, '$i', {enumerable:true, configurable:false, set:(v)=>{console.trace()}, get:()=>false}); // writable:false, value:false});
-*/
-
-export var KNOWN_NULL = {};
-Object.defineProperty(KNOWN_NULL, 'toJSON', {enumerable:true, configurable:false, writable:false, value:()=><any>undefined});
-Object.defineProperty(KNOWN_NULL, '$i', {enumerable:true, configurable:false, writable:false, value:false});
-
-/*
-export var KNOWN_NULL = {
-    toJSON: ()=><any>undefined,
-    $i: false
-};
-*/
-
 
 export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
 
@@ -1111,7 +1334,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
             dbgTree("Cannot find event %s while trying to hook on %s", eventType, this.url);
             throw new Error("Cannot find event " + eventType);
         }
-        dbgTree('Hooking %s to %s, before it has %s hooks', eventType, this.url, this.cbs.length);
+        dbgTree('Hooking %s : %s, before it has %s hooks', this.url, eventType, this.cbs.length);
         var handler = new ctor(callback, context, this);
         handler.hook();
         this.cbs.push(handler);
@@ -1128,7 +1351,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
             ach.decommission();
             return false;
         });
-        dbgTree('Unhooked %s from %s, before it had %s, now has %s hooks', eventType, this.url, prelen, this.cbs.length);
+        dbgTree('Unhooked %s : %s, before it had %s, now has %s hooks', this.url, eventType, prelen, this.cbs.length);
     }
 
 
@@ -1228,7 +1451,6 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
         //this.root.subscribe(this.url);
         var prog = this.root.nextProg();
-        this.root.handleChange(this.url, value, prog);
         this.root.send('s', this.url, value, prog, (ack:string)=>{
             if (onComplete) {
                 if (ack == 'k') {
@@ -1239,6 +1461,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
                 }
             }
         });
+        this.root.handleChange(this.url, value, prog);
     }
 
     /**
@@ -1248,9 +1471,6 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
         //this.root.subscribe(this.url);
         var prog = this.root.nextProg();
-        for (var k in value) {
-            this.root.handleChange(this.url + '/' + k, value[k], prog);
-        }
         this.root.send('m', this.url, value, prog, (ack:string)=>{
             if (onComplete) {
                 if (ack == 'k') {
@@ -1261,6 +1481,9 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
                 }
             }
         });
+        for (var k in value) {
+            this.root.handleChange(this.url + '/' + k, value[k], prog);
+        }
     }
 
     /**
@@ -1274,66 +1497,6 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         return new RDb3Tree(this.root, this.url + Utils.normalizePath(path));
     }
 
-}
-
-
-var progQId = 1;
-
-export class QuerySubscription extends Subscription {
-    id: string = (progQId++)+'a';
-
-    compareField: string = null;
-    from: string | number;
-    to: string | number;
-    equals: string | number;
-    limit: number = null;
-    limitLast = false;
-
-    done = false;
-
-    constructor(oth: Subscription | QuerySubscription) {
-        super(oth.root, oth.path);
-        if (oth instanceof QuerySubscription) {
-            this.compareField = oth.compareField;
-            this.from = oth.from;
-            this.to = oth.to;
-            this.equals = oth.equals;
-            this.limit = oth.limit;
-            this.limitLast = oth.limitLast;
-        }
-    }
-
-    add(cb: Handler) {
-        super.add(cb);
-    }
-
-    remove(cb: Handler) {
-        super.remove(cb);
-    }
-
-    subscribe() {
-        this.root.subscribeQuery(this);
-        this.root.sendSubscribeQuery(this);
-    }
-
-    unsubscribe() {
-        this.root.unsubscribeQuery(this.id);
-    }
-
-    getCurrentValue() {
-        return this.root.getValue('/q' + this.id);
-    }
-
-    makeSorter() {
-        if (!this.compareField) return null;
-        return (a :any,b :any)=>{
-            var va = a[this.compareField];
-            var vb = b[this.compareField];
-            if (va > vb) return 1;
-            if (vb > va) return -1;
-            return 0;
-        };
-    }
 }
 
 

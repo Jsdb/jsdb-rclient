@@ -1,6 +1,6 @@
 "use strict";
-var Debug = require('debug');
-Debug.enable('tsdb:*');
+//Debug.enable('tsdb:*');
+var Benchmark = require('benchmark');
 var Client = require('../main/Client');
 var SocketIO = require('socket.io');
 var SocketIOClient = require('socket.io-client');
@@ -9,6 +9,47 @@ var tsMatchers_1 = require('tsmatchers/js/main/tsMatchers');
 var dummyProg = 1;
 var root;
 describe('RDb3Client >', function () {
+    describe('Metadata >', function () {
+        it('Should binary-search find stuff', function () {
+            var md = new Client.Metadata();
+            md.sorted = ['1', '3', '5', '7'];
+            for (var i = 0; i < md.sorted.length; i++) {
+                tsmatchers_1.assert("Find element " + i, md.binaryIndexOf(md.sorted[i]), tsmatchers_1.is.array.equals([true, i]));
+            }
+            tsmatchers_1.assert("Should not find non present", md.binaryIndexOf('ciao')[0], false);
+            tsmatchers_1.assert("Should find insertion point", md.binaryIndexOf('2'), tsmatchers_1.is.array.equals([false, 1]));
+            tsmatchers_1.assert("Should find insertion point", md.binaryIndexOf('4'), tsmatchers_1.is.array.equals([false, 2]));
+            tsmatchers_1.assert("Should find insertion point", md.binaryIndexOf('6'), tsmatchers_1.is.array.equals([false, 3]));
+            tsmatchers_1.assert("Should find insertion point", md.binaryIndexOf('8'), tsmatchers_1.is.array.equals([false, 4]));
+            tsmatchers_1.assert("Should find insertion point", md.binaryIndexOf('9'), tsmatchers_1.is.array.equals([false, 4]));
+        });
+        it('Should correctly delete elements', function () {
+            var md = new Client.Metadata();
+            md.sorted = ['1', '3', '5', '7'];
+            var ret = md.modifySorted(['1'], [false]);
+            tsmatchers_1.assert("modified the array", md.sorted, tsmatchers_1.is.array.equals(['3', '5', '7']));
+            tsmatchers_1.assert("returned one element", ret, tsmatchers_1.is.array.withLength(1));
+            tsmatchers_1.assert("the returned element is empty", ret[0], tsmatchers_1.is.strictly.object.matching({ prev: tsmatchers_1.is.falsey }));
+        });
+        it('Should correctly add elements', function () {
+            var md = new Client.Metadata();
+            md.sorted = ['1', '3', '5', '7'];
+            var ret = md.modifySorted(['2'], [true]);
+            tsmatchers_1.assert("modified the array", md.sorted, tsmatchers_1.is.array.equals(['1', '2', '3', '5', '7']));
+            tsmatchers_1.assert("returned the addition", ret, tsmatchers_1.is.array.withLength(1));
+            tsmatchers_1.assert("returned the right values", ret[0], tsmatchers_1.is.object.matching({ prev: tsmatchers_1.is.falsey, actual: '1', index: 1 }));
+        });
+        it('Should add, remove and reorder elements', function () {
+            var md = new Client.Metadata();
+            md.sorted = ['1', '3', '5', '7'];
+            var ret = md.modifySorted(['2', '5', '7'], [true, false, null]);
+            tsmatchers_1.assert("modified the array", md.sorted, tsmatchers_1.is.array.equals(['1', '2', '3', '7']));
+            tsmatchers_1.assert("returned the addition", ret, tsmatchers_1.is.array.withLength(3));
+            tsmatchers_1.assert("returned the right values for add", ret[0], tsmatchers_1.is.object.matching({ prev: tsmatchers_1.is.falsey, actual: '1' }));
+            tsmatchers_1.assert("returned the right values for remove", ret[1], tsmatchers_1.is.array.withLength(0));
+            tsmatchers_1.assert("returned the right values for moved", ret[2], tsmatchers_1.is.object.matching({ prev: '5', actual: '3' }));
+        });
+    });
     describe('Local data >', function () {
         beforeEach(function () {
             root = new Client.RDb3Root(null, 'http://ciao/');
@@ -51,12 +92,18 @@ describe('RDb3Client >', function () {
                 root.handleChange('/node/sub', 'ciao', dummyProg++);
                 tsmatchers_1.assert("Should return string", root.data['node']['sub'], 'ciao');
             });
+            it('Should overwrite sub primitive', function () {
+                root.handleChange('/node/sub', 'ciao', dummyProg++);
+                root.handleChange('/node/sub', 'pippo', dummyProg++);
+                tsmatchers_1.assert("Should return string", root.data['node']['sub'], 'pippo');
+            });
             it('Should write sub primitive with alternative url', function () {
                 root.handleChange('node/sub/', 'ciao', dummyProg++);
                 tsmatchers_1.assert("Should return string", root.data['node']['sub'], 'ciao');
             });
             it('Should write object', function () {
                 root.handleChange('/node', { sub1: 'ciao', sub2: 'altro' }, dummyProg++);
+                console.log(root.data);
                 tsmatchers_1.assert("Should return plain object", root.data['node'], tsmatchers_1.is.object.matching({
                     sub1: 'ciao',
                     sub2: 'altro'
@@ -165,13 +212,16 @@ describe('RDb3Client >', function () {
                 var snap = new Client.RDb3Snap({ sub: { val: 'ciao' }, oth: 1 }, root, '/test/node');
                 tsmatchers_1.assert('Should return object', snap.val(), tsmatchers_1.is.strictly.object.matching({ sub: { val: 'ciao' }, oth: 1 }));
             });
-            it('.val return value is unmodifiable', function () {
+            // This test has been removed cause cloning each time the value is too slow
+            /*
+            it('.val return value is unmodifiable', () => {
                 var snap = new Client.RDb3Snap({ sub: { val: 'ciao' }, oth: 1 }, root, '/test/node');
                 var val = snap.val();
                 val.sub.val = 'pippo';
                 var val2 = snap.val();
-                tsmatchers_1.assert('Should return object', snap.val(), tsmatchers_1.is.strictly.object.matching({ sub: { val: 'ciao' }, oth: 1 }));
+                assert('Should return object', snap.val(), is.strictly.object.matching({ sub: { val: 'ciao' }, oth: 1 }));
             });
+            */
             it('.child should return native direct child', function () {
                 var snap = new Client.RDb3Snap({ sub: { val: 'ciao' }, oth: 1 }, root, '/test/node');
                 var child = snap.child('oth');
@@ -262,8 +312,8 @@ describe('RDb3Client >', function () {
             });
             it('Should not send a value for existing but not loaded data', function () {
                 root.handleChange('/node/data/sub', 'ciao', dummyProg++);
-                tsmatchers_1.assert("/node is incomplete", root.data['node'].$i, true);
-                tsmatchers_1.assert("/node/data is incomplete", root.data['node']['data'].$i, true);
+                tsmatchers_1.assert("/node is incomplete", root.getOrCreateMetadata('/node').incomplete, true);
+                tsmatchers_1.assert("/node/data is incomplete", root.getOrCreateMetadata('/node/data').incomplete, true);
                 var ref = root.getUrl('/node/');
                 var snap;
                 var fn = ref.on('value', function (data) { return snap = data; });
@@ -314,6 +364,125 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
                 tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.strictly.object.matching({ data: 'ciao' }));
             });
+            it('Should correctly handle value events for leafs', function () {
+                root.handleChange('/node', {}, dummyProg++);
+                root.handleChange('/node/a', {}, dummyProg++);
+                root.handleChange('/node', { a: { b: { c: 'bau' } } }, dummyProg++);
+                var ref = root.getUrl('/node/a/b');
+                var snap = null;
+                ref.on('value', function (data) { return snap = data; });
+                tsmatchers_1.assert("Received initial event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
+                tsmatchers_1.assert("Recevied event data", snap.val(), tsmatchers_1.is.object.matching({ c: 'bau' }));
+                snap = null;
+                root.handleChange('/node/a/b/c', 'ciao', dummyProg++);
+                tsmatchers_1.assert("Received second event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Second snapshot is existing", snap.exists(), true);
+                tsmatchers_1.assert("Recevied second event data", snap.val(), tsmatchers_1.is.object.matching({ c: 'ciao' }));
+                snap = null;
+                root.handleChange('/node/a/b/c', null, dummyProg++);
+                tsmatchers_1.assert("Received third event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Third snapshot is existing", snap.exists(), true);
+                tsmatchers_1.assert("Recevied third event data", snap.val(), tsmatchers_1.is.object.matching({ c: tsmatchers_1.is.undefined }));
+                snap = null;
+                root.handleChange('/node/a/b', null, dummyProg++);
+                tsmatchers_1.assert("Received fourth event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Fourth snapshot is existing", snap.exists(), false);
+            });
+            it("Should send a value event for mere completion", function () {
+                var ref1 = root.getUrl('/node/a/b');
+                var snap1 = null;
+                ref1.on('value', function (data) { return snap1 = data; });
+                var ref2 = root.getUrl('/node');
+                var snap2 = null;
+                ref2.on('value', function (data) { return snap2 = data; });
+                root.handleChange('/node/a/b', 'ciao', dummyProg++);
+                tsmatchers_1.assert("First event received", snap1, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("First dnapshot is existing", snap1.exists(), true);
+                tsmatchers_1.assert("First event data is right", snap1.val(), 'ciao');
+                root.handleChange('/node', { a: { b: 'ciao' } }, dummyProg++);
+                tsmatchers_1.assert("Second event received", snap2, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Second dnapshot is existing", snap2.exists(), true);
+                tsmatchers_1.assert("Second event data is right", snap2.val(), tsmatchers_1.is.object.matching({ a: { b: 'ciao' } }));
+                snap1 = snap2 = null;
+                root.handleChange('/node/a', { b: 'ciao' }, dummyProg++);
+                tsmatchers_1.assert("First event not received again", snap1, tsmatchers_1.is.falsey);
+                tsmatchers_1.assert("Second event not received again", snap2, tsmatchers_1.is.falsey);
+            });
+            it("Should send a value event from inside an initial value event", function () {
+                var ref = root.getUrl('/node');
+                root.handleChange('/node', { 'data': 'bau' }, dummyProg++);
+                var cnt = 0;
+                ref.on('value', function (data) {
+                    cnt++;
+                    if (cnt == 1) {
+                        root.handleChange('/node', { 'data': 'bio' }, dummyProg++);
+                    }
+                });
+                tsmatchers_1.assert("sent and received the second event", cnt, 2);
+            });
+            it('Snapshots are immutable', function () {
+                var ref = root.getUrl('/node');
+                var snaps = [];
+                ref.on('value', function (data) { return snaps.push(data); });
+                root.handleChange('/node', { 'data1': 'bau' }, dummyProg++);
+                root.handleChange('/node/data2', 'ciao', dummyProg++);
+                root.handleChange('/node/data3', 'miao', dummyProg++);
+                root.handleChange('/node/data1', null, dummyProg++);
+                root.handleChange('/node/data1', 'pio', dummyProg++);
+                tsmatchers_1.assert("Received events", snaps, tsmatchers_1.is.array.withLength(5));
+                tsmatchers_1.assert("First snap is only one element", snaps[0].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Second snap is two element", snaps[1].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Third snap is three element", snaps[2].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Fourth snap is two element", snaps[3].val(), tsmatchers_1.is.strictly.object.matching({ data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Third snap is three element", snaps[4].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                var keys = [];
+                snaps[0].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in first snap", keys, tsmatchers_1.is.array.equals(['data1']));
+                keys = [];
+                snaps[1].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in second snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2']));
+                keys = [];
+                snaps[2].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in third snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2', 'data3']));
+                keys = [];
+                snaps[3].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in fourth snap", keys, tsmatchers_1.is.array.equals(['data2', 'data3']));
+                keys = [];
+                snaps[4].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in fifth snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2', 'data3']));
+            });
+            it('Snapshots are immutable also with nested objects', function () {
+                var ref = root.getUrl('/node');
+                var snaps = [];
+                ref.on('value', function (data) { return snaps.push(data); });
+                root.handleChange('/node', { 'data1': { val: 'bau' } }, dummyProg++);
+                root.handleChange('/node/data2', { val: 'ciao' }, dummyProg++);
+                root.handleChange('/node/data3', { val: 'miao' }, dummyProg++);
+                root.handleChange('/node/data1', null, dummyProg++);
+                root.handleChange('/node/data1', { val: 'pio' }, dummyProg++);
+                tsmatchers_1.assert("Received events", snaps, tsmatchers_1.is.array.withLength(5));
+                tsmatchers_1.assert("First snap is only one element", snaps[0].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Second snap is two element", snaps[1].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Third snap is three element", snaps[2].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Fourth snap is two element", snaps[3].val(), tsmatchers_1.is.strictly.object.matching({ data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Third snap is three element", snaps[4].val(), tsmatchers_1.is.strictly.object.matching({ data1: tsmatchers_1.is.truthy, data2: tsmatchers_1.is.truthy, data3: tsmatchers_1.is.truthy }));
+                var keys = [];
+                snaps[0].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in first snap", keys, tsmatchers_1.is.array.equals(['data1']));
+                keys = [];
+                snaps[1].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in second snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2']));
+                keys = [];
+                snaps[2].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in third snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2', 'data3']));
+                keys = [];
+                snaps[3].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in fourth snap", keys, tsmatchers_1.is.array.equals(['data2', 'data3']));
+                keys = [];
+                snaps[4].forEach(function (cs) { keys.push(cs.key()); });
+                tsmatchers_1.assert("Right keys in fifth snap", keys, tsmatchers_1.is.array.equals(['data1', 'data2', 'data3']));
+            });
         });
         describe('Known missing >', function () {
             it('Should send a value event for confirmed null, also on second call', function () {
@@ -338,14 +507,15 @@ describe('RDb3Client >', function () {
                 root.handleChange('/node/sub2', null, dummyProg++);
                 root.handleChange('/node/sub1', { name: 'simone' }, dummyProg++);
                 root.handleChange('/node', { 'sub2': { name: 'simone' } }, dummyProg++);
+                console.log(root.getOrCreateMetadata('/node'));
                 var ref = root.getUrl('/node');
                 var snap;
                 var cb = ref.on('value', function (data) { return snap = data; });
                 tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
-                tsmatchers_1.assert("Snapshot is non existing", snap.exists(), true);
+                tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
             });
         });
-        describe('Local cache >', function () {
+        describe.skip('Local cache >', function () {
             it('Should not delete children protected by parent', function () {
                 root.handleChange('/node', { a: 1, b: 2, c: 3 }, dummyProg++);
                 root.subscribe('/node');
@@ -386,7 +556,7 @@ describe('RDb3Client >', function () {
                 root.handleChange('/node', { a: { val: 1 } }, dummyProg++);
                 root.subscribe('/node');
                 root.handleChange('/node', null, dummyProg++);
-                tsmatchers_1.assert("Data should be with known null", root.data, tsmatchers_1.is.strictly.object.matching({ node: tsmatchers_1.is.object }));
+                tsmatchers_1.assert("Data should be with known null", root.data, tsmatchers_1.is.strictly.object.matching({ node: tsmatchers_1.is.object, $i: true, $v: tsmatchers_1.is.object }));
             });
             /*
             it('Should clean up parents when setting null only', ()=>{
@@ -499,10 +669,11 @@ describe('RDb3Client >', function () {
                 for (var k in obj) {
                     root.handleChange('/list/' + k, null, dummyProg++);
                 }
+                tsmatchers_1.assert("Received no child_addeds on delete with explicit null", adds, tsmatchers_1.is.array.withLength(0));
                 for (var k in obj) {
                     root.handleChange('/list/' + k + '/val', null, dummyProg++);
                 }
-                tsmatchers_1.assert("Received no child_addeds on delete", adds, tsmatchers_1.is.array.withLength(0));
+                tsmatchers_1.assert("Received no child_addeds on deleted element nested nullification", adds, tsmatchers_1.is.array.withLength(0));
                 tsmatchers_1.assert("Received all child_removeds", rems, tsmatchers_1.is.array.withLength(4));
             });
             /*
@@ -554,24 +725,24 @@ describe('RDb3Client >', function () {
                 });
                 var adds = [];
                 ref.on('child_added', function (data) { return adds.push(data); });
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 }, $l: true }, dummyProg++);
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(3));
                 for (var i = 0; i < adds.length; i++) {
                     tsmatchers_1.assert("Received snapshots does not expose url meta-path", adds[i].ref().url.substr(0, 6), '/list/');
                 }
                 tsmatchers_1.assert("Value events not sent yet", value, tsmatchers_1.is.falsey);
-                root.handleQueryChange('1a', '/list', { $i: true, $d: true }, dummyProg++);
+                root.receivedQueryDone({ q: '1a' });
                 tsmatchers_1.assert("Value events sent correctly", value, tsmatchers_1.is.strictly.object.matching({ a: tsmatchers_1.is.object, b: tsmatchers_1.is.object, c: tsmatchers_1.is.object }));
                 var rems = [];
                 var chng = [];
                 ref.on('child_removed', function (data) { return rems.push(data); });
                 ref.on('child_changed', function (data) { return chng.push(data); });
-                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 4 }, $i: true }, dummyProg++);
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 4 }, $i: true }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_changed", chng, tsmatchers_1.is.array.withLength(2));
                 for (var i = 0; i < chng.length; i++) {
                     tsmatchers_1.assert("Received snapshots does not expose url meta-path", chng[i].ref().url.substr(0, 6), '/list/');
                 }
-                root.handleQueryChange('1a', '/list', { b: { val: 4 } }, dummyProg++);
+                root.handleChange('/list', { b: { val: 4 } }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(2));
                 for (var i = 0; i < rems.length; i++) {
                     tsmatchers_1.assert("Received snapshots does not expose url meta-path", rems[i].ref().url.substr(0, 6), '/list/');
@@ -585,14 +756,14 @@ describe('RDb3Client >', function () {
                 var chng = [];
                 ref.on('child_removed', function (data) { return rems.push(data); });
                 ref.on('child_changed', function (data) { return chng.push(data); });
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
-                tsmatchers_1.assert("Received child_changed", chng, tsmatchers_1.is.array.withLength(0));
-                root.handleQueryChange('1a', '/list/a/val', 5, dummyProg++);
-                tsmatchers_1.assert("Received child_changed", chng, tsmatchers_1.is.array.withLength(1));
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '1a');
+                tsmatchers_1.assert("Received no initial child_changed", chng, tsmatchers_1.is.array.withLength(0));
+                root.handleChange('/list/a/val', 5, dummyProg++, '1a');
+                tsmatchers_1.assert("Received first child_changed", chng, tsmatchers_1.is.array.withLength(1));
                 for (var i = 0; i < chng.length; i++) {
                     tsmatchers_1.assert("Received changed snapshots does not expose url meta-path", chng[i].ref().url.substr(0, 6), '/list/');
                 }
-                root.handleQueryChange('1a', '/list/b', null, dummyProg++);
+                root.handleChange('/list/b', null, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(1));
                 for (var i = 0; i < rems.length; i++) {
                     tsmatchers_1.assert("Received removed snapshots does not expose url meta-path", rems[i].ref().url.substr(0, 6), '/list/');
@@ -611,7 +782,8 @@ describe('RDb3Client >', function () {
                 ref.on('value', function (data, prek) { vals.push(data); });
                 tsmatchers_1.assert("Should have sent no values", vals, tsmatchers_1.is.array.withLength(0));
                 tsmatchers_1.assert("Should have sent no added", adds, tsmatchers_1.is.array.withLength(0));
-                root.handleQueryChange('1a', '/list', { u3: { name: 'mario' }, $d: true }, dummyProg++);
+                root.handleChange('/users', { u3: { name: 'mario' }, $i: true }, dummyProg++, '1a');
+                root.receivedQueryDone({ q: '1a' });
                 tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Received value", vals, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Received right value", vals[0].child('u3').val(), tsmatchers_1.is.object.matching({ name: 'mario' }));
@@ -632,9 +804,9 @@ describe('RDb3Client >', function () {
                 var preks = [];
                 var items = [];
                 ref.on('child_added', function (data, prek) { adds.push(data); preks.push(prek); items.push(data.key()); });
-                root.handleQueryChange('1a', '/list', { a: { val: 3 }, b: { val: 2 }, c: { val: 1 } }, dummyProg++);
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 2 }, c: { val: 1 } }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(3));
-                tsmatchers_1.assert("Kys are sorted", items, tsmatchers_1.is.array.equals(['c', 'b', 'a']));
+                tsmatchers_1.assert("Keys are sorted", items, tsmatchers_1.is.array.equals(['c', 'b', 'a']));
                 tsmatchers_1.assert("Pre keys are correct", preks, tsmatchers_1.is.array.equals([null, 'c', 'b']));
             });
             it('Should notify query child_changed (and child_moved) with new position', function () {
@@ -642,21 +814,21 @@ describe('RDb3Client >', function () {
                 ref = ref.orderByChild('val');
                 ref.getSubscription().id = '1a';
                 ref.on('child_added', function (data, prek) { });
-                root.handleQueryChange('1a', '/list', { a: { val: 1 }, b: { val: 3 }, c: { val: 5 } }, dummyProg++);
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 3 }, c: { val: 5 } }, dummyProg++, '1a');
                 var adds = [];
                 var preks = [];
                 var items = [];
                 ref.on('child_changed', function (data, prek) { adds.push(data); preks.push(prek); items.push(data.key()); });
-                root.handleQueryChange('1a', '/list/c/val', 2, dummyProg++);
+                root.handleChange('/list/c/val', 2, dummyProg++, '1a');
                 tsmatchers_1.assert("Kys are sorted", items, tsmatchers_1.is.array.equals(['c']));
-                tsmatchers_1.assert("Pre keys are correct", preks, tsmatchers_1.is.array.equals(['a']));
+                tsmatchers_1.assert("Pre keys are correct at first round", preks, tsmatchers_1.is.array.equals(['a']));
                 ref.off('child_changed');
                 var preks = [];
                 var items = [];
                 ref.on('child_moved', function (data, prek) { adds.push(data); preks.push(prek); items.push(data.key()); });
-                root.handleQueryChange('1a', '/list/c/val', 5, dummyProg++);
+                root.handleChange('/list/c/val', 5, dummyProg++, '1a');
                 tsmatchers_1.assert("Kys are sorted", items, tsmatchers_1.is.array.equals(['c']));
-                tsmatchers_1.assert("Pre keys are correct", preks, tsmatchers_1.is.array.equals(['b']));
+                tsmatchers_1.assert("Pre keys are correct at second round", preks, tsmatchers_1.is.array.equals(['b']));
             });
             // TODO child_moved on child removal
             it('Should remove excess elements', function () {
@@ -667,17 +839,17 @@ describe('RDb3Client >', function () {
                 ref.on('child_added', function (data, prek) { adds.push(data); });
                 var rems = [];
                 ref.on('child_removed', function (data, prek) { rems.push(data); });
-                root.handleQueryChange('1a', '/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } }, dummyProg++);
+                root.handleChange('/list', { a: { val: 5 }, b: { val: 6 }, c: { val: 7 } }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(3));
                 adds = [];
-                root.handleQueryChange('1a', '/list/d', { val: 1 }, dummyProg++);
+                root.handleChange('/list/d', { val: 1 }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received new child_added", adds, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(1));
                 tsmatchers_1.assert("Removed the last element", rems[0].key(), 'c');
-                root.handleQueryChange('1a', '/list/d/val', 7, dummyProg++);
+                root.handleChange('/list/d/val', 7, dummyProg++, '1a');
                 adds = [];
                 rems = [];
-                root.handleQueryChange('1a', '/list', { x: { val: 1 }, y: { val: 2 }, $i: true }, dummyProg++);
+                root.handleChange('/list', { x: { val: 1 }, y: { val: 2 }, $i: true }, dummyProg++, '1a');
                 tsmatchers_1.assert("Received new child_added", adds, tsmatchers_1.is.array.withLength(2));
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(2));
                 tsmatchers_1.assert("Removed the last element", rems[0].key(), 'b');
@@ -707,6 +879,7 @@ describe('RDb3Client >', function () {
             tsmatchers_1.assert('Value correct after update', valds.val(), tsmatchers_1.is.strictly.object.matching({ c: 3, d: 6, e: 7 }));
             valds = null;
             ref.remove();
+            tsmatchers_1.assert('Value event sent after delete', valds, tsmatchers_1.is.truthy);
             tsmatchers_1.assert('Value set after delete', valds, tsmatchers_1.is.object);
             tsmatchers_1.assert('Value correct after delete', valds.exists(), false);
         });
@@ -723,9 +896,10 @@ describe('RDb3Client >', function () {
             var listcb = list.on('value', function (ds) { listval = ds; });
             var trcb = tr.on('value', function (ds) { trval = ds; });
             var val = { list: { a: 1, b: 2 }, other: { c: 3, d: 4 } };
+            var check = JSON.parse(JSON.stringify(val));
             tr.set(val);
-            tsmatchers_1.assert("Root value set", trval.val(), tsmatchers_1.is.object.matching(val));
-            tsmatchers_1.assert("List value set", listval.val(), tsmatchers_1.is.object.matching(val.list));
+            tsmatchers_1.assert("Root value set", trval.val(), tsmatchers_1.is.object.matching(check));
+            tsmatchers_1.assert("List value set", listval.val(), tsmatchers_1.is.object.matching(check.list));
             tr.set(null);
             tsmatchers_1.assert("Root value unset", trval.val(), null);
             // TODO this is about propagating nullification to children
@@ -896,7 +1070,139 @@ describe('RDb3Client >', function () {
             });
         });
     });
+    describe('Performance >', function () {
+        it('PF1 Parsing performance without listeners', function () {
+            this.timeout(35000);
+            var bigdata = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+                bigdata['user' + i] = usdata;
+            }
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+                .add("simple parsing", function () {
+                inc++;
+                root = new Client.RDb3Root(null, 'http://ciao/');
+                root.handleChange('/users', bigdata, 4);
+            })
+                .on('complete', function () {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.012773601477272726  dev: 0.001411317392724511");
+                console.log("CNG : " + (stats.mean - 0.012773601477272726) + " : " + (stats.mean / 0.012773601477272726));
+                console.log("Inc : " + inc);
+            })
+                .run();
+            var data = root.getValue('/users');
+            tsmatchers_1.assert("Value is right", data, tsmatchers_1.is.object.matching(bigdata));
+        });
+        it('PF2 Parsing performance with child listeners', function () {
+            this.timeout(35000);
+            var bigdata = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+                bigdata['user' + i] = usdata;
+            }
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+                .add("parsing with events", function () {
+                inc++;
+                root = new Client.RDb3Root(null, 'http://ciao/');
+                var ref = root.getUrl('/users');
+                ref.on('value', function () { });
+                ref.on('child_added', function () { });
+                root.handleChange('/users', bigdata, 4);
+            })
+                .on('complete', function () {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.014293066598591544  dev: 0.00205628694474153");
+                console.log("CNG : " + (stats.mean - 0.014293066598591544) + " : " + (stats.mean / 0.014293066598591544));
+                console.log("Inc : " + inc);
+            })
+                .run();
+            var data = root.getValue('/users');
+            tsmatchers_1.assert("Value is right", data, tsmatchers_1.is.object.matching(bigdata));
+        });
+        it('PF3 Parsing performance with real child listeners', function () {
+            this.timeout(35000);
+            var bigdata = {};
+            for (var i = 0; i < 100; i++) {
+                var usdata = {
+                    name: 'user' + i,
+                    surname: 'user' + i,
+                    friends: {}
+                };
+                for (var j = 0; j < 10; j++) {
+                    usdata.friends['friend' + j] = {
+                        _ref: 'firend' + j
+                    };
+                }
+                bigdata['user' + i] = usdata;
+            }
+            var inc = 0;
+            var suite = new Benchmark.Suite("test")
+                .add("parsing with events", function () {
+                inc++;
+                root = new Client.RDb3Root(null, 'http://ciao/');
+                var ref = root.getUrl('/users');
+                ref.on('value', function (ds) { ds.val(); });
+                ref.on('child_added', function (ds) { ds.val(); });
+                root.handleChange('/users', bigdata, 4);
+            })
+                .on('complete', function () {
+                var stats = this[0].stats;
+                console.log("ACT : " + stats.mean + "  dev: " + stats.deviation);
+                console.log("WAS : 0.008502651874755384  dev: 0.0005244241768842533");
+                console.log("CNG : " + (stats.mean - 0.008502651874755384) + " : " + (stats.mean / 0.008502651874755384));
+                console.log("Inc : " + inc);
+            })
+                .run();
+            var data = root.getValue('/users');
+            tsmatchers_1.assert("Value is right", data, tsmatchers_1.is.object.matching(bigdata));
+        });
+    });
 });
+function lazyExtend(prev, next) {
+    if (!prev)
+        return;
+    for (var k in next) {
+        var val = next[k];
+        if (typeof (val) !== 'object')
+            continue;
+        lazyExtend(prev[k], val);
+    }
+    if (!next.toJSON)
+        next.toJSON = jsonAll;
+    Object.setPrototypeOf(next, prev);
+}
+function jsonAll() {
+    var tmp = {};
+    for (var key in this) {
+        var to = typeof this[key];
+        if (to !== 'function')
+            tmp[key] = this[key];
+    }
+    return tmp;
+}
 function wait(to) {
     return new Promise(function (res, rej) {
         setTimeout(function () { return res(null); }, to);
