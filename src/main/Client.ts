@@ -637,7 +637,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
             delete newval.$i;
 
             if (oldval) {
-                Object.setPrototypeOf(newval, oldval);
+                setPrototypeOf(newval, oldval);
             }
 
             // TODO if this passed from incomplete to complete, then it is CHANGED and should trigger events
@@ -932,7 +932,7 @@ export class QuerySubscription extends Subscription {
 
         // Make my new val extend my old val
         var myoldval = this.myData;
-        Object.setPrototypeOf(mynewval, myoldval);
+        setPrototypeOf(mynewval, myoldval);
         this.myData = mynewval;
 
         // Forward to super.checkHandlers using my meta and my values
@@ -954,7 +954,7 @@ export class QuerySubscription extends Subscription {
             }
 
             // The remove value extends the new valuefrom previous steps, and becomes the new data 
-            Object.setPrototypeOf(remval, mynewval);
+            setPrototypeOf(remval, mynewval);
             this.myData = remval;
 
             // Delegate all event stuff to usual method
@@ -982,7 +982,7 @@ export class QuerySubscription extends Subscription {
 
         // Make my new val extend my old val
         var myoldval = this.myData;
-        Object.setPrototypeOf(mynewval, myoldval);
+        setPrototypeOf(mynewval, myoldval);
         this.myData = mynewval;
 
         // Forward to super.checkHandlers using my meta and my values
@@ -1520,4 +1520,24 @@ var nextTick = (function () {
 	}
 
 	return null;
+}());
+
+// Quick polyfill for setPrototypeOf
+
+var setPrototypeOf = (function() { 
+
+    function setProtoOf(obj :any, proto :any) {
+        obj.__proto__ = proto;
+    }
+
+    function mixinProperties(obj :any, proto :any) {
+        for (var prop in proto) {
+            obj[prop] = proto[prop];
+        }
+    }
+
+    if (Object.setPrototypeOf) return Object.setPrototypeOf;
+    if ({__proto__:[]} instanceof Array) return setProtoOf;
+    console.log("USING raw mixin for oject extension, will slow down things a lot");
+    return mixinProperties;
 }());
