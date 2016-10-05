@@ -104,7 +104,7 @@ class Db {
             let tuple = found[i];
             let ref = root.getUrl(tuple.url);
             ref.once('value', (ds)=>{
-                tuple.par[tuple.name] = ds.val();
+                tuple.par[tuple.name] = ds.deepVal();
                 cnt--;
                 if (cnt == 0) cb(val);
             });
@@ -164,7 +164,7 @@ class Db {
             }
         }
         this.getRef(path).once('value', (ds)=>{
-            this.lastVal = ds.val();
+            this.lastVal = ds.deepVal();
             var tv = this.lastVal;
             if (extra.length) {
                 tv = {};
@@ -190,7 +190,7 @@ class Db {
             }
         }
         this.getRef(path).once('value', (ds)=>{
-            var val = ds.val();
+            var val = ds.deepVal();
             var fto = to;
             var prog = 1;
             while (Fs.existsSync(fto)) {
@@ -267,9 +267,10 @@ class Db {
         this.getRef(path).once('value', (ds)=>{
             this.doResolve(ds.val(), (val)=>{
                 wrapOutput('LS ' + this.describeRef(ds.ref()).toString() + ' ' + extra, ()=>{
-                    for (var line in val) {
+                    for (var ele in val) {
+                        var line = ele;
                         for (var i = 0; i < extra.length; i++) {
-                            line += '\t| ' + Util.inspect(val[line][extra[i]], {depth:1});
+                            line += '\t| ' + Util.inspect(val[ele][extra[i]], {depth:1});
                         }
                         console.log(line);
                     }
@@ -296,9 +297,9 @@ class Db {
     on(path :string = this.path) :void {
         var ref = this.getRef(path);
         this.registerListening(ref, 'value', ref.on('value', (ds)=>{
-            var val = ds.val();
+            var val = ds.deepVal();
             this.doResolve(val, (val)=>{
-                wrapOutput('ON ' + this.describeRef(ref), ()=>Util.inspect(ds.val(), false, null, Boolean((<any>process.stdout).isTTY)));
+                wrapOutput('ON ' + this.describeRef(ref), ()=>Util.inspect(val, false, null, Boolean((<any>process.stdout).isTTY)));
             });
         }));
     }
@@ -306,10 +307,10 @@ class Db {
     onChild(path :string = this.path) :void {
         var ref = this.getRef(path);
         this.registerListening(ref, 'child_added', ref.on('child_added', (ds)=>{
-            wrapOutput('CHILD ADDED ' + this.describeRef(ref) + ' -> ' + ds.key(), ()=>Util.inspect(ds.val(), false, null, Boolean((<any>process.stdout).isTTY)));
+            wrapOutput('CHILD ADDED ' + this.describeRef(ref) + ' -> ' + ds.key(), ()=>Util.inspect(ds.deepVal(), false, null, Boolean((<any>process.stdout).isTTY)));
         }));
         this.registerListening(ref, 'child_removed', ref.on('child_removed', (ds)=>{
-            wrapOutput('CHILD REMOVED ' + this.describeRef(ref) + ' -> ' + ds.key(), ()=>Util.inspect(ds.val(), false, null, Boolean((<any>process.stdout).isTTY)));
+            wrapOutput('CHILD REMOVED ' + this.describeRef(ref) + ' -> ' + ds.key(), ()=>Util.inspect(ds.deepVal(), false, null, Boolean((<any>process.stdout).isTTY)));
         }));
     }
     

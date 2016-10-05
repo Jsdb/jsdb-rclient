@@ -101,7 +101,7 @@ jsdbrclient \
                 var tuple = found[i];
                 var ref = root.getUrl(tuple.url);
                 ref.once('value', function (ds) {
-                    tuple.par[tuple.name] = ds.val();
+                    tuple.par[tuple.name] = ds.deepVal();
                     cnt--;
                     if (cnt == 0)
                         cb(val);
@@ -174,7 +174,7 @@ jsdbrclient \
                 }
             }
             this.getRef(path).once('value', function (ds) {
-                _this.lastVal = ds.val();
+                _this.lastVal = ds.deepVal();
                 var tv = _this.lastVal;
                 if (extra.length) {
                     tv = {};
@@ -201,7 +201,7 @@ jsdbrclient \
                 }
             }
             this.getRef(path).once('value', function (ds) {
-                var val = ds.val();
+                var val = ds.deepVal();
                 var fto = to;
                 var prog = 1;
                 while (Fs.existsSync(fto)) {
@@ -289,9 +289,10 @@ jsdbrclient \
             this.getRef(path).once('value', function (ds) {
                 _this.doResolve(ds.val(), function (val) {
                     wrapOutput('LS ' + _this.describeRef(ds.ref()).toString() + ' ' + extra, function () {
-                        for (var line in val) {
+                        for (var ele in val) {
+                            var line = ele;
                             for (var i = 0; i < extra.length; i++) {
-                                line += '\t| ' + Util.inspect(val[line][extra[i]], { depth: 1 });
+                                line += '\t| ' + Util.inspect(val[ele][extra[i]], { depth: 1 });
                             }
                             console.log(line);
                         }
@@ -317,9 +318,9 @@ jsdbrclient \
             if (path === void 0) { path = this.path; }
             var ref = this.getRef(path);
             this.registerListening(ref, 'value', ref.on('value', function (ds) {
-                var val = ds.val();
+                var val = ds.deepVal();
                 _this.doResolve(val, function (val) {
-                    wrapOutput('ON ' + _this.describeRef(ref), function () { return Util.inspect(ds.val(), false, null, Boolean(process.stdout.isTTY)); });
+                    wrapOutput('ON ' + _this.describeRef(ref), function () { return Util.inspect(val, false, null, Boolean(process.stdout.isTTY)); });
                 });
             }));
         };
@@ -328,10 +329,10 @@ jsdbrclient \
             if (path === void 0) { path = this.path; }
             var ref = this.getRef(path);
             this.registerListening(ref, 'child_added', ref.on('child_added', function (ds) {
-                wrapOutput('CHILD ADDED ' + _this.describeRef(ref) + ' -> ' + ds.key(), function () { return Util.inspect(ds.val(), false, null, Boolean(process.stdout.isTTY)); });
+                wrapOutput('CHILD ADDED ' + _this.describeRef(ref) + ' -> ' + ds.key(), function () { return Util.inspect(ds.deepVal(), false, null, Boolean(process.stdout.isTTY)); });
             }));
             this.registerListening(ref, 'child_removed', ref.on('child_removed', function (ds) {
-                wrapOutput('CHILD REMOVED ' + _this.describeRef(ref) + ' -> ' + ds.key(), function () { return Util.inspect(ds.val(), false, null, Boolean(process.stdout.isTTY)); });
+                wrapOutput('CHILD REMOVED ' + _this.describeRef(ref) + ' -> ' + ds.key(), function () { return Util.inspect(ds.deepVal(), false, null, Boolean(process.stdout.isTTY)); });
             }));
         };
         Db.prototype.off = function (path) {

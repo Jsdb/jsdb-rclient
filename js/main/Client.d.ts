@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161005_161245_master_1.0.0_4dfdfe0
+ * TSDB remote client 20161006_012312_master_1.0.0_6d788ac
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -152,6 +152,7 @@ export declare class RDb3Snap implements Spi.DbTreeSnap {
     constructor(data: any, root: RDb3Root, url: string, meta?: Metadata);
     exists(): boolean;
     val(): any;
+    deepVal(): any;
     child(childPath: string): RDb3Snap;
     forEach(childAction: (childSnapshot: RDb3Snap) => void): boolean;
     key(): string;

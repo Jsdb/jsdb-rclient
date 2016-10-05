@@ -1199,6 +1199,13 @@ export class RDb3Snap implements Spi.DbTreeSnap {
         if (!this.exists()) return null;
         return this.data;
     }
+
+    deepVal() :any {
+        if (!this.exists()) return null;
+        this.data = flatten(this.data);
+        return this.data;
+    }
+
     child(childPath: string): RDb3Snap {
         var subs = findChain(childPath, this.data, true, false);
         var suburl = this.url + Utils.normalizePath(childPath);
@@ -1342,6 +1349,20 @@ function findChain<T>(url: string | string[], from: T, leaf = true, create = fal
             pre[sp[i]] = ac;
         }
         ret.push(ac);
+    }
+    return ret;
+}
+
+function flatten(val :any) {
+    if (val === null) return null;
+    if (val === undefined) return undefined;
+    if (typeof(val) !== 'object') return val;
+    if (!getPrototypeOf(val)) return val;
+    var ret :any = {};
+    for (var k in val) {
+        if (val[k] === undefined) continue;
+        ret[k] = flatten(val[k]);
+        if (val[k] === null) continue
     }
     return ret;
 }
@@ -1558,7 +1579,7 @@ var nextTick = (function () {
 }());
 
 
-// Quick polyfill for setPrototypeOf
+// Quick polyfill for setPrototypeOf and getPrototypeOf
 var setPrototypeOf = (function() {
 
     function setProtoOf(obj :any, proto :any) {
@@ -1575,4 +1596,20 @@ var setPrototypeOf = (function() {
     if ({__proto__:[]} instanceof Array) return setProtoOf;
     console.log("USING raw mixin for oject extension, will slow down things a lot");
     return mixinProperties;
+}());
+
+var getPrototypeOf = (function() {
+    if (Object.getPrototypeOf) return Object.getPrototypeOf;
+
+    function getProtoOf(obj :any) {
+        return obj.__proto__;
+    }
+
+    function getConstructorProto(obj :any) {
+        // May break if the constructor has been tampered with
+        return obj.constructor.prototype;
+    }
+
+    if ({__proto__:[]} instanceof Array) return getProtoOf;
+    return getConstructorProto;
 }());

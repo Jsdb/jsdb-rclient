@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161005_161245_master_1.0.0_4dfdfe0
+ * TSDB remote client 20161006_012312_master_1.0.0_6d788ac
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161005_161245_master_1.0.0_4dfdfe0';
+    exports.VERSION = '20161006_012312_master_1.0.0_6d788ac';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -1124,6 +1124,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return null;
             return this.data;
         };
+        RDb3Snap.prototype.deepVal = function () {
+            if (!this.exists())
+                return null;
+            this.data = flatten(this.data);
+            return this.data;
+        };
         RDb3Snap.prototype.child = function (childPath) {
             var subs = findChain(childPath, this.data, true, false);
             var suburl = this.url + Utils.normalizePath(childPath);
@@ -1268,6 +1274,25 @@ var __extends = (this && this.__extends) || function (d, b) {
                 pre[sp[i]] = ac;
             }
             ret.push(ac);
+        }
+        return ret;
+    }
+    function flatten(val) {
+        if (val === null)
+            return null;
+        if (val === undefined)
+            return undefined;
+        if (typeof (val) !== 'object')
+            return val;
+        if (!getPrototypeOf(val))
+            return val;
+        var ret = {};
+        for (var k in val) {
+            if (val[k] === undefined)
+                continue;
+            ret[k] = flatten(val[k]);
+            if (val[k] === null)
+                continue;
         }
         return ret;
     }
@@ -1460,7 +1485,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         }
         return null;
     }());
-    // Quick polyfill for setPrototypeOf
+    // Quick polyfill for setPrototypeOf and getPrototypeOf
     var setPrototypeOf = (function () {
         function setProtoOf(obj, proto) {
             obj.__proto__ = proto;
@@ -1476,6 +1501,20 @@ var __extends = (this && this.__extends) || function (d, b) {
             return setProtoOf;
         console.log("USING raw mixin for oject extension, will slow down things a lot");
         return mixinProperties;
+    }());
+    var getPrototypeOf = (function () {
+        if (Object.getPrototypeOf)
+            return Object.getPrototypeOf;
+        function getProtoOf(obj) {
+            return obj.__proto__;
+        }
+        function getConstructorProto(obj) {
+            // May break if the constructor has been tampered with
+            return obj.constructor.prototype;
+        }
+        if ({ __proto__: [] } instanceof Array)
+            return getProtoOf;
+        return getConstructorProto;
     }());
 });
 
