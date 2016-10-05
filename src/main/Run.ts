@@ -220,13 +220,36 @@ class Db {
         }
         var content = Fs.readFileSync(fto,"utf8");
         var jsonContent = JSON.parse(content);
-        console.log(jsonContent);
         var ref = this.getRef(path);
         ref.set(jsonContent, (err)=>{
             if (err) {
                 wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>err);
             } else {
                 wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>Fs.statSync(fto).size + ' bytes loaded');
+            }
+        });
+    }
+
+    importText(to :string, path? :string) {
+        if (!path) {
+            if (to.indexOf(' ') == -1) {
+                path = '';
+            } else {
+                path = to.substr(to.indexOf(' ') + 1);
+                to = to.substr(0,to.indexOf(' '));
+            }
+        }
+        var fto = to.trim();
+        if (!Fs.existsSync(fto)) {
+            throw new Error('Cannot find file "' + fto + '"'); 
+        }
+        var content = Fs.readFileSync(fto,"utf8");
+        var ref = this.getRef(path);
+        ref.set(content, (err)=>{
+            if (err) {
+                wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>err);
+            } else {
+                wrapOutput('LOAD ' + fto + ' -> ' + this.describeRef(ref).toString(), ()=>Fs.statSync(fto).size + ' bytes loaded as text');
             }
         });
     }
@@ -336,6 +359,7 @@ class Db {
         'get','Loads data and display them, also place them in db.lastVal',
         'export','Save data from DB to a file',
         'import','Load data from file to DB',
+        'importText','Load text from file to DB',
         'ls','List children in current path',
         'pwd','Print current path',
         'on','Listen on value changes and dumps them to screen',

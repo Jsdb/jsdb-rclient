@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20160927_233748_master_1.0.0_6825c2c
+ * TSDB remote client 20161005_161245_master_1.0.0_4dfdfe0
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20160927_233748_master_1.0.0_6825c2c';
+    exports.VERSION = '20161005_161245_master_1.0.0_4dfdfe0';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {

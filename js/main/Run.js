@@ -233,7 +233,6 @@ jsdbrclient \
             }
             var content = Fs.readFileSync(fto, "utf8");
             var jsonContent = JSON.parse(content);
-            console.log(jsonContent);
             var ref = this.getRef(path);
             ref.set(jsonContent, function (err) {
                 if (err) {
@@ -241,6 +240,32 @@ jsdbrclient \
                 }
                 else {
                     wrapOutput('LOAD ' + fto + ' -> ' + _this.describeRef(ref).toString(), function () { return Fs.statSync(fto).size + ' bytes loaded'; });
+                }
+            });
+        };
+        Db.prototype.importText = function (to, path) {
+            var _this = this;
+            if (!path) {
+                if (to.indexOf(' ') == -1) {
+                    path = '';
+                }
+                else {
+                    path = to.substr(to.indexOf(' ') + 1);
+                    to = to.substr(0, to.indexOf(' '));
+                }
+            }
+            var fto = to.trim();
+            if (!Fs.existsSync(fto)) {
+                throw new Error('Cannot find file "' + fto + '"');
+            }
+            var content = Fs.readFileSync(fto, "utf8");
+            var ref = this.getRef(path);
+            ref.set(content, function (err) {
+                if (err) {
+                    wrapOutput('LOAD ' + fto + ' -> ' + _this.describeRef(ref).toString(), function () { return err; });
+                }
+                else {
+                    wrapOutput('LOAD ' + fto + ' -> ' + _this.describeRef(ref).toString(), function () { return Fs.statSync(fto).size + ' bytes loaded as text'; });
                 }
             });
         };
@@ -356,6 +381,7 @@ jsdbrclient \
             'get', 'Loads data and display them, also place them in db.lastVal',
             'export', 'Save data from DB to a file',
             'import', 'Load data from file to DB',
+            'importText', 'Load text from file to DB',
             'ls', 'List children in current path',
             'pwd', 'Print current path',
             'on', 'Listen on value changes and dumps them to screen',
