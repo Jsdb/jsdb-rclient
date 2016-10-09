@@ -1030,8 +1030,8 @@ export class QuerySubscription extends Subscription {
             var a = this.myData[ka];
             var b = this.myData[kb];
             // TODO should supports paths in compare fields?
-            var va = a[this.compareField];
-            var vb = b[this.compareField];
+            var va = a && a[this.compareField];
+            var vb = b && b[this.compareField];
             if (va > vb) return 1;
             if (vb > va) return -1;
             // Fall back to key order if compareField is equal

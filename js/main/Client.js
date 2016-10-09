@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161006_012312_master_1.0.0_6d788ac
+ * TSDB remote client 20161009_214330_master_1.0.0_bf997a4
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161006_012312_master_1.0.0_6d788ac';
+    exports.VERSION = '20161009_214330_master_1.0.0_bf997a4';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -958,8 +958,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                 var a = _this.myData[ka];
                 var b = _this.myData[kb];
                 // TODO should supports paths in compare fields?
-                var va = a[_this.compareField];
-                var vb = b[_this.compareField];
+                var va = a && a[_this.compareField];
+                var vb = b && b[_this.compareField];
                 if (va > vb)
                     return 1;
                 if (vb > va)
