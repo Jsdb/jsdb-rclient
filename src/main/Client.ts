@@ -211,6 +211,17 @@ export class RDb3Root implements Spi.DbTreeRoot {
             sock.on('v', (msg:any)=>this.receivedValue(msg));
             sock.on('qd', (msg:any)=>this.receivedQueryDone(msg));
             sock.on('qx', (msg:any)=>this.receivedQueryExit(msg));
+            sock.on('connect', ()=>{
+                for (var k in this.subscriptions) {
+                    // Filter query subscriptions
+                    if (k.indexOf('/qry__') == 0) continue;
+                    this.sendSubscribe(k);
+                }
+                for (var k in this.queries) {
+                    var qs = this.queries[k];
+                    this.sendSubscribeQuery(qs);
+                }
+            });
         }
     }
 
@@ -435,13 +446,13 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     subscribeQuery(query :QuerySubscription) {
         this.queries[query.id] = query;
-        this.subscriptions['/q' + query.id] = query; 
+        this.subscriptions['/qry__' + query.id] = query; 
     }
 
     unsubscribeQuery(id :string) {
         this.sendUnsubscribeQuery(id);
         delete this.queries[id];
-        delete this.subscriptions['/q' + id];
+        delete this.subscriptions['/qry__' + id];
         //delete this.data['q' + id];
     }
 
@@ -558,7 +569,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
         var state = new MergeState();
         state.writeVersion = prog;
-        this.merge('/q' + id, nv, this.data['q'+id], state);
+        this.merge('/qry__' + id, nv, this.data['q'+id], state);
 
         delete nv.$l;
         this.data = fnv;
@@ -580,8 +591,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
                 fnv.$i = true;
                 // TODO what to pass here as a parentval??
                 // TODO probably here the sversion should not be prog, given that the deletion are based on the current situation
-                this.merge('/q' + id, torem, this.data['q'+id], state);
-                //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+                this.merge('/qry__' + id, torem, this.data['q'+id], state);
+                //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/qry__'+id, prog, {}, def.path);
                 this.data = fnv;
             }
         }

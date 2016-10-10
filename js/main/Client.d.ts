@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161009_214330_master_1.0.0_bf997a4
+ * TSDB remote client 20161010_025751_master_1.0.0_421997c
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;

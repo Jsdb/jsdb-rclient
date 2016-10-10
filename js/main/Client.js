@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161009_214330_master_1.0.0_bf997a4
+ * TSDB remote client 20161010_025751_master_1.0.0_421997c
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161009_214330_master_1.0.0_bf997a4';
+    exports.VERSION = '20161010_025751_master_1.0.0_421997c';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -214,6 +214,18 @@ var __extends = (this && this.__extends) || function (d, b) {
                 sock.on('v', function (msg) { return _this.receivedValue(msg); });
                 sock.on('qd', function (msg) { return _this.receivedQueryDone(msg); });
                 sock.on('qx', function (msg) { return _this.receivedQueryExit(msg); });
+                sock.on('connect', function () {
+                    for (var k in _this.subscriptions) {
+                        // Filter query subscriptions
+                        if (k.indexOf('/qry__') == 0)
+                            continue;
+                        _this.sendSubscribe(k);
+                    }
+                    for (var k in _this.queries) {
+                        var qs = _this.queries[k];
+                        _this.sendSubscribeQuery(qs);
+                    }
+                });
             }
         }
         RDb3Root.prototype.nextProg = function () {
@@ -418,12 +430,12 @@ var __extends = (this && this.__extends) || function (d, b) {
         */
         RDb3Root.prototype.subscribeQuery = function (query) {
             this.queries[query.id] = query;
-            this.subscriptions['/q' + query.id] = query;
+            this.subscriptions['/qry__' + query.id] = query;
         };
         RDb3Root.prototype.unsubscribeQuery = function (id) {
             this.sendUnsubscribeQuery(id);
             delete this.queries[id];
-            delete this.subscriptions['/q' + id];
+            delete this.subscriptions['/qry__' + id];
             //delete this.data['q' + id];
         };
         RDb3Root.prototype.getValue = function (url) {
@@ -529,7 +541,7 @@ var __extends = (this && this.__extends) || function (d, b) {
     
             var state = new MergeState();
             state.writeVersion = prog;
-            this.merge('/q' + id, nv, this.data['q'+id], state);
+            this.merge('/qry__' + id, nv, this.data['q'+id], state);
     
             delete nv.$l;
             this.data = fnv;
@@ -551,8 +563,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                     fnv.$i = true;
                     // TODO what to pass here as a parentval??
                     // TODO probably here the sversion should not be prog, given that the deletion are based on the current situation
-                    this.merge('/q' + id, torem, this.data['q'+id], state);
-                    //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/q'+id, prog, {}, def.path);
+                    this.merge('/qry__' + id, torem, this.data['q'+id], state);
+                    //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/qry__'+id, prog, {}, def.path);
                     this.data = fnv;
                 }
             }
