@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161010_025751_master_1.0.0_421997c
+ * TSDB remote client 20161013_203225_master_1.0.0_b836e49
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161010_025751_master_1.0.0_421997c';
+    exports.VERSION = '20161013_203225_master_1.0.0_b836e49';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -319,6 +319,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             }
             if (typeof (def.equals) !== 'undefined') {
                 sdef.equals = def.equals;
+            }
+            if (def.valuein) {
+                sdef.valuein = def.valuein;
             }
             if (typeof (def.from) !== 'undefined') {
                 sdef.from = def.from;
@@ -872,6 +875,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 this.from = oth.from;
                 this.to = oth.to;
                 this.equals = oth.equals;
+                this.valuein = oth.valuein;
                 this.limit = oth.limit;
                 this.limitLast = oth.limitLast;
             }
@@ -1400,6 +1404,14 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Tree.prototype.equalTo = function (value, key) {
             var ret = this.subQuery();
             ret.qsub.equals = value;
+            return ret;
+        };
+        /**
+        * Creates a Query which includes children which match one of the specified values.
+        */
+        RDb3Tree.prototype.valueIn = function (values, key) {
+            var ret = this.subQuery();
+            ret.qsub.valuein = values;
             return ret;
         };
         /**

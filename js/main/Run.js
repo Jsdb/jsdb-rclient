@@ -377,6 +377,9 @@ jsdbrclient \
             console.log("Created query" + n);
             return ret;
         };
+        Db.prototype.getRoot = function () {
+            return root;
+        };
         Db.exp = [
             'cd', 'Change "directory", moves inside a child node',
             'get', 'Loads data and display them, also place them in db.lastVal',

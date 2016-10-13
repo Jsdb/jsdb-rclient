@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161010_025751_master_1.0.0_421997c
+ * TSDB remote client 20161013_203225_master_1.0.0_b836e49
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -113,6 +113,7 @@ export declare class QuerySubscription extends Subscription {
     from: string | number;
     to: string | number;
     equals: string | number;
+    valuein: string[] | number[];
     limit: number;
     limitLast: boolean;
     myData: any;
@@ -191,6 +192,10 @@ export declare class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     * Creates a Query which includes children which match the specified value.
     */
     equalTo(value: string | number, key?: string): RDb3Tree;
+    /**
+    * Creates a Query which includes children which match one of the specified values.
+    */
+    valueIn(values: string[] | number[], key?: string): RDb3Tree;
     /**
     * Generates a new Query object limited to the first certain number of children.
     */

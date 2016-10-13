@@ -355,6 +355,10 @@ class Db {
         return ret;
     }
 
+    getRoot() {
+        return root;
+    }
+
     static exp = [
         'cd','Change "directory", moves inside a child node',
         'get','Loads data and display them, also place them in db.lastVal',

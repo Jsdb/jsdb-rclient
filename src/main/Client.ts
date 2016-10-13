@@ -328,6 +328,9 @@ export class RDb3Root implements Spi.DbTreeRoot {
         if (typeof(def.equals) !== 'undefined') {
             sdef.equals = def.equals;
         }
+        if (def.valuein) {
+            sdef.valuein = def.valuein;
+        }
         if (typeof(def.from) !== 'undefined') {
             sdef.from = def.from;
         }
@@ -909,6 +912,7 @@ export class QuerySubscription extends Subscription {
     from: string | number;
     to: string | number;
     equals: string | number;
+    valuein: string[] | number[];
     limit: number = null;
     limitLast = false;
 
@@ -925,6 +929,7 @@ export class QuerySubscription extends Subscription {
             this.from = oth.from;
             this.to = oth.to;
             this.equals = oth.equals;
+            this.valuein = oth.valuein;
             this.limit = oth.limit;
             this.limitLast = oth.limitLast;
         }
@@ -1485,6 +1490,17 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         ret.qsub.equals = value;
         return ret;
     }
+
+    /**
+    * Creates a Query which includes children which match one of the specified values.
+    */
+    valueIn(values: string[]| number[], key?: string): RDb3Tree {
+        var ret = this.subQuery();
+        ret.qsub.valuein = values;
+        return ret;
+    }
+
+
     /**
     * Generates a new Query object limited to the first certain number of children.
     */
