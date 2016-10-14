@@ -341,6 +341,9 @@ export class RDb3Root implements Spi.DbTreeRoot {
             sdef.limit = def.limit;
             sdef.limitLast = def.limitLast;
         }
+        if (def.sortField) {
+            sdef.sortField = def.sortField;
+        }
         this.send('sq', sdef);
     }
 
@@ -916,6 +919,8 @@ export class QuerySubscription extends Subscription {
     limit: number = null;
     limitLast = false;
 
+    sortField :string;
+
     //done = false;
 
     myData :any = {};
@@ -932,6 +937,7 @@ export class QuerySubscription extends Subscription {
             this.valuein = oth.valuein;
             this.limit = oth.limit;
             this.limitLast = oth.limitLast;
+            this.sortField = oth.sortField;
         }
     }
 
@@ -1041,13 +1047,14 @@ export class QuerySubscription extends Subscription {
     }
 
     makeSorter() :SortFunction {
-        if (!this.compareField) return null;
+        var sortOn = this.sortField || this.compareField;
+        if (!sortOn) return null;
         return (ka :string,kb :string)=>{
             var a = this.myData[ka];
             var b = this.myData[kb];
             // TODO should supports paths in compare fields?
-            var va = a && a[this.compareField];
-            var vb = b && b[this.compareField];
+            var va = a && a[sortOn];
+            var vb = b && b[sortOn];
             if (va > vb) return 1;
             if (vb > va) return -1;
             // Fall back to key order if compareField is equal
@@ -1517,6 +1524,13 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
         var ret = this.subQuery();
         ret.qsub.limit = limit;
         ret.qsub.limitLast = true;
+        return ret;
+    }
+
+
+    sortByChild(key: string): RDb3Tree {
+        var ret = this.subQuery();
+        ret.qsub.sortField = key;
         return ret;
     }
 

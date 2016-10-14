@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161013_203225_master_1.0.0_b836e49
+ * TSDB remote client 20161014_030549_master_1.0.0_fd23718
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -116,6 +116,7 @@ export declare class QuerySubscription extends Subscription {
     valuein: string[] | number[];
     limit: number;
     limitLast: boolean;
+    sortField: string;
     myData: any;
     myMeta: Metadata;
     constructor(oth: Subscription | QuerySubscription);
@@ -204,6 +205,7 @@ export declare class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     * Generates a new Query object limited to the last certain number of children.
     */
     limitToLast(limit: number): RDb3Tree;
+    sortByChild(key: string): RDb3Tree;
     /**
     * Gets the absolute URL corresponding to this DbTree reference's location.
     */

@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161013_203225_master_1.0.0_b836e49
+ * TSDB remote client 20161014_030549_master_1.0.0_fd23718
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161013_203225_master_1.0.0_b836e49';
+    exports.VERSION = '20161014_030549_master_1.0.0_fd23718';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -332,6 +332,9 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (def.limit) {
                 sdef.limit = def.limit;
                 sdef.limitLast = def.limitLast;
+            }
+            if (def.sortField) {
+                sdef.sortField = def.sortField;
             }
             this.send('sq', sdef);
         };
@@ -878,6 +881,7 @@ var __extends = (this && this.__extends) || function (d, b) {
                 this.valuein = oth.valuein;
                 this.limit = oth.limit;
                 this.limitLast = oth.limitLast;
+                this.sortField = oth.sortField;
             }
         }
         QuerySubscription.prototype.add = function (cb) {
@@ -968,14 +972,15 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         QuerySubscription.prototype.makeSorter = function () {
             var _this = this;
-            if (!this.compareField)
+            var sortOn = this.sortField || this.compareField;
+            if (!sortOn)
                 return null;
             return function (ka, kb) {
                 var a = _this.myData[ka];
                 var b = _this.myData[kb];
                 // TODO should supports paths in compare fields?
-                var va = a && a[_this.compareField];
-                var vb = b && b[_this.compareField];
+                var va = a && a[sortOn];
+                var vb = b && b[sortOn];
                 if (va > vb)
                     return 1;
                 if (vb > va)
@@ -1430,6 +1435,11 @@ var __extends = (this && this.__extends) || function (d, b) {
             var ret = this.subQuery();
             ret.qsub.limit = limit;
             ret.qsub.limitLast = true;
+            return ret;
+        };
+        RDb3Tree.prototype.sortByChild = function (key) {
+            var ret = this.subQuery();
+            ret.qsub.sortField = key;
             return ret;
         };
         /**
