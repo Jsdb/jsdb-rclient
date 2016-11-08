@@ -646,7 +646,7 @@ describe('RDb3Client >', () => {
             });
         });
 
-        describe.skip('Local cache >', ()=>{
+        describe('Local cache >', ()=>{
             it('Should not delete children protected by parent', ()=>{
                 root.handleChange('/node', {a:1,b:2,c:3}, dummyProg++);
                 root.subscribe('/node');
@@ -654,18 +654,34 @@ describe('RDb3Client >', () => {
                 assert("Value should be there", root.getValue('/node/a'), 1);
 
                 root.unsubscribe('/node/a');
-                assert("Value should still be there and valid", root.getValue('/node'), is.object.matching({a:1,$i:is.undefined}));
+                assert("Value should still be there and valid", root.getValue('/node'), is.object.matching({a:1}));
 
                 root.unsubscribe('/node');
-                assert("Value should not be there anymore", root.getValue('/node'), is.object.matching({$i:is.truthy}));
+                assert("Value should not be there anymore", root.getValue('/node'), is.falsey);
             });
 
             it('Should not delete siblings on the way', ()=>{
                 root.handleChange('/node', {a:{val:1},b:{val:2},c:{val:3}}, dummyProg++);
                 root.subscribe('/node/a');
                 root.unsubscribe('/node/a');
-                assert("Value should not be valid anymore", root.getValue('/node/a'), is.object.matching({val:1,$i:true}));
-                assert("Sibling should still be there", root.getValue('/node/b'), is.object.matching({val:2,$i:is.undefined}));
+                assert("Value should not be valid anymore", root.getValue('/node/a'), is.falsey);
+                assert("Sibling should still be there", root.getValue('/node/b'), is.object.matching({val:2}));
+            });
+
+            it('Should preserve children', ()=>{
+                root.handleChange('/node', {a:{val:1},b:{val:2},c:{val:3}}, dummyProg++);
+                root.subscribe('/node/a');
+                root.unsubscribe('/node');
+                assert("Sibling should not be valid anymore", root.getValue('/node/b'), is.falsey);
+                assert("Value should still be there", root.getValue('/node/a'), is.object.matching({val:1}));
+            });
+
+            it('Should preserve grandchildren', ()=>{
+                root.handleChange('/node', {a:{val:1},b:{val:2},c:{val:3}}, dummyProg++);
+                root.subscribe('/node/a/val');
+                root.unsubscribe('/node');
+                assert("Sibling should not be valid anymore", root.getValue('/node/b'), is.falsey);
+                assert("Value should still be there", root.getValue('/node/a'), is.object.matching({val:1}));
             });
 
             /*
@@ -686,14 +702,15 @@ describe('RDb3Client >', () => {
                 root.handleChange('/node', null, dummyProg++);
                 assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
             });
-            */
 
             it('Should not clean up, but keep know nulls, if there is subscription', ()=>{
                 root.handleChange('/node', {a:{val:1}}, dummyProg++);
                 root.subscribe('/node');
                 root.handleChange('/node', null, dummyProg++);
+                console.log(root.data);
                 assert("Data should be with known null", root.data, is.strictly.object.matching({node:is.object, $i: true, $v :is.object}));
             });
+            */
 
             /*
             it('Should clean up parents when setting null only', ()=>{

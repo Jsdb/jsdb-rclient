@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161014_030549_master_1.0.0_fd23718
+ * TSDB remote client 20161108_040725_master_1.0.0_828aaf7
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -56,6 +56,7 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     constructor(sock: Socket, baseUrl: string);
     private subscriptions;
     private queries;
+    private ongoingWrite;
     private metadata;
     private data;
     private doneProm;
@@ -77,6 +78,9 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     sendUnsubscribeQuery(id: string): void;
     subscribe(path: string): Subscription;
     unsubscribe(path: string): void;
+    doneWrite(url: string): void;
+    startingWrite(url: string): void;
+    checkUncovered(path: string): void;
     subscribeQuery(query: QuerySubscription): void;
     unsubscribeQuery(id: string): void;
     getValue(url: string | string[]): any;

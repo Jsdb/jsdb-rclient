@@ -515,23 +515,37 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Snapshot is existing", snap.exists(), true);
             });
         });
-        describe.skip('Local cache >', function () {
+        describe('Local cache >', function () {
             it('Should not delete children protected by parent', function () {
                 root.handleChange('/node', { a: 1, b: 2, c: 3 }, dummyProg++);
                 root.subscribe('/node');
                 root.subscribe('/node/a');
                 tsmatchers_1.assert("Value should be there", root.getValue('/node/a'), 1);
                 root.unsubscribe('/node/a');
-                tsmatchers_1.assert("Value should still be there and valid", root.getValue('/node'), tsmatchers_1.is.object.matching({ a: 1, $i: tsmatchers_1.is.undefined }));
+                tsmatchers_1.assert("Value should still be there and valid", root.getValue('/node'), tsmatchers_1.is.object.matching({ a: 1 }));
                 root.unsubscribe('/node');
-                tsmatchers_1.assert("Value should not be there anymore", root.getValue('/node'), tsmatchers_1.is.object.matching({ $i: tsmatchers_1.is.truthy }));
+                tsmatchers_1.assert("Value should not be there anymore", root.getValue('/node'), tsmatchers_1.is.falsey);
             });
             it('Should not delete siblings on the way', function () {
                 root.handleChange('/node', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
                 root.subscribe('/node/a');
                 root.unsubscribe('/node/a');
-                tsmatchers_1.assert("Value should not be valid anymore", root.getValue('/node/a'), tsmatchers_1.is.object.matching({ val: 1, $i: true }));
-                tsmatchers_1.assert("Sibling should still be there", root.getValue('/node/b'), tsmatchers_1.is.object.matching({ val: 2, $i: tsmatchers_1.is.undefined }));
+                tsmatchers_1.assert("Value should not be valid anymore", root.getValue('/node/a'), tsmatchers_1.is.falsey);
+                tsmatchers_1.assert("Sibling should still be there", root.getValue('/node/b'), tsmatchers_1.is.object.matching({ val: 2 }));
+            });
+            it('Should preserve children', function () {
+                root.handleChange('/node', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
+                root.subscribe('/node/a');
+                root.unsubscribe('/node');
+                tsmatchers_1.assert("Sibling should not be valid anymore", root.getValue('/node/b'), tsmatchers_1.is.falsey);
+                tsmatchers_1.assert("Value should still be there", root.getValue('/node/a'), tsmatchers_1.is.object.matching({ val: 1 }));
+            });
+            it('Should preserve grandchildren', function () {
+                root.handleChange('/node', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++);
+                root.subscribe('/node/a/val');
+                root.unsubscribe('/node');
+                tsmatchers_1.assert("Sibling should not be valid anymore", root.getValue('/node/b'), tsmatchers_1.is.falsey);
+                tsmatchers_1.assert("Value should still be there", root.getValue('/node/a'), tsmatchers_1.is.object.matching({ val: 1 }));
             });
             /*
             it('Should clean up parents when setting null on grandchild', ()=>{
@@ -551,13 +565,15 @@ describe('RDb3Client >', function () {
                 root.handleChange('/node', null, dummyProg++);
                 assert("Data should be emtpy", root.data, is.strictly.object.matching({}));
             });
-            */
-            it('Should not clean up, but keep know nulls, if there is subscription', function () {
-                root.handleChange('/node', { a: { val: 1 } }, dummyProg++);
+
+            it('Should not clean up, but keep know nulls, if there is subscription', ()=>{
+                root.handleChange('/node', {a:{val:1}}, dummyProg++);
                 root.subscribe('/node');
                 root.handleChange('/node', null, dummyProg++);
-                tsmatchers_1.assert("Data should be with known null", root.data, tsmatchers_1.is.strictly.object.matching({ node: tsmatchers_1.is.object, $i: true, $v: tsmatchers_1.is.object }));
+                console.log(root.data);
+                assert("Data should be with known null", root.data, is.strictly.object.matching({node:is.object, $i: true, $v :is.object}));
             });
+            */
             /*
             it('Should clean up parents when setting null only', ()=>{
                 root.handleChange('/node', null, dummyProg++);

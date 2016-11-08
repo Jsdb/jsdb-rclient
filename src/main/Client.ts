@@ -227,6 +227,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     private subscriptions :{[index:string]:Subscription} = {};
     private queries :{[index:string]:QuerySubscription} = {};
+    private ongoingWrite :{[index:string]:number} = {};
 
     private metadata :{[index:string]:Metadata} = {};
     private data :any;
@@ -363,75 +364,101 @@ export class RDb3Root implements Spi.DbTreeRoot {
 
     unsubscribe(path :string) {
         delete this.subscriptions[path];
+        this.checkUncovered(path);
+    }
+
+    doneWrite(url :string) {
+        this.ongoingWrite[url] = (this.ongoingWrite[url] || 0) - 1;
+        if (this.ongoingWrite[url] <= 0) delete this.ongoingWrite[url];
+        // If the write is finished and there is no subscription, we can delete it 
+        this.checkUncovered(url);
+    }
+    
+    startingWrite(url :string) {
+        this.ongoingWrite[url] = (this.ongoingWrite[url] || 0) + 1;
+    }
+
+    checkUncovered(path :string) {
         /*
-        var md = this.root.find(path);
-        if (!md) return;
-        md.subscription = null;
+        Principile is :
+        - If resource is covered by other subscription, skip
+        - If resource is protected by ongoing write, skip
+        - Otherwise delete the resource
+        - When a write has just been done 
+        ... ongoing-write protect the resource
+        ... Wait for write completion (ack from server) then :
+        ...... remove ongoing write protection
+        ...... is no subscription, run the removal from first step
         */
 
-        // TODO reimplement unsub policy
-        /*
-        delete this.subscriptions[path];
+        // Make a list of paths to sub-subscriptions and sub-ongoing-write
+        var subCovereds :string[] = [];
 
-        var sp = splitUrl(path);
-        var ch = findChain(sp, this.data);
-        var leaf = Utils.leafPath(path);
-        var lst = ch[ch.length - 1];
+        // Search anchestors for active sub, in that case exit
+        for (var k in this.subscriptions) {
+            if (path.indexOf(k) == 0) return;
+            if (k.indexOf(path) == 0) subCovereds.push(k);
+        }
+        // Search anchestors for ongoing write protection, in case exit
+        for (var k in this.ongoingWrite) {
+            if (path.indexOf(k) == 0) return;
+            if (k.indexOf(path) == 0) subCovereds.push(k);
+        }
 
-        // When path X is unsubscribed it :
-        // .. Check if up the tree there is a subscription protecting this path
-        //if (this.subscriptions['']) return;
-        var acp = path;
-        while (acp) {
-            if (this.subscriptions[acp]) return;
-            acp = Utils.parentPath(acp);
+        // Create the new data, extending the previous one, having undefined in the removed path
+        var ndata :any = {};
+
+        var parts = path.split('/').slice(1);
+        var ac = this.data;
+        var nv :any = ndata;
+        setPrototypeOf(nv, ac);
+        
+        for (var i = 0; i < parts.length - 1; i++) {
+            ac = ac[parts[i]];
+            if (typeof(ac) !== 'object') break;
+            if (ac == null) break;
+            var no = {};
+            nv[parts[i]] = no;
+            nv = no;
+            setPrototypeOf(nv, ac);
         }
-        // .. Recurses down, invalidating any value that is not protected by a subscriptions
-        if (lst) {
-            this.recursiveClean(path, lst);
+        if (ac != null && typeof(ac) === 'object') {
+            if (subCovereds.length == 0) {
+                // If no sub elementes, we can set it to undefined
+                nv[parts[parts.length-1]] = undefined;
+            } else {
+                // Create the new data object, copying the subcovereds in the right position
+                // focus on the current object 
+                ac = ac[parts[parts.length-1]];
+                // create a new version, will contain only subs
+                var no = {};
+                for (var i = 0; i < subCovereds.length; i++) {
+                    // using parts.length taks only the substring from the current path and over
+                    var sp = subCovereds[i].split('/').slice(parts.length + 1);
+                    // find the old value
+                    var olc = findChain(sp, ac, true, false);
+                    var olv = olc.pop();
+                    if (olv === undefined) continue;
+
+                    // create the new container
+                    var noc = findChain(sp, no, false, true);
+                    var nev :any = noc.pop();
+                    // set the value
+                    nev[sp.pop()] = olv;
+                }
+                nv[parts[parts.length-1]] = no;
+            }
+
+            this.data = ndata;
         }
-        // .. Recurses up, invalidate any key that results in an empty object
-        for (var i = ch.length - 1; i > 0; i--) {
-            var ac = ch[i];
-            var inpname = sp[i];
-            if (typeof(ac) === 'object' && ac !== KNOWN_NULL) {
-                dbgRoot("Recursing up, invalidating %s : %s", inpname);
-                markIncomplete(ac);
+
+        // Delete all metadatas equal or sub of the path
+        for (var k in this.metadata) {
+            if (k.indexOf(path) == 0) {
+                delete this.metadata[k];
             }
         }
-        */
 
-        // TODO what is below is suboptimal
-        /*
-        Should not remove data, chldren of the path being unsubscribed, if they have their own listener.
-        For example :
-          sub : /list 
-          val : /list = {a:1,b:2,c:3}
-          sub : /list/a
-          uns : /list ---> should remove /list/b and /list/c but not list/a since it has a listener there
-
-        And :
-          sub : /list 
-          val : /list = {a:1,b:2,c:3}
-          sub : /list/a
-          uns : /list/a ---> should not remove anything, cause /list/a is being listened by /list 
-          uns : /list -> now it can delete everything
-        */ 
-        /*
-        if (path == '') {
-            // Special case for root
-            dbgRoot("Clearing all data, unsubscribed from root");
-            this.data = {};
-            markIncomplete(this.data);
-        } else {
-            var ch = findChain(Utils.parentPath(path), this.data);
-            var leaf = Utils.leafPath(path);
-            var lst = ch.pop();
-            if (lst) {
-                delete lst[leaf];
-            }
-        }
-        */
     }
 
     /*
@@ -545,65 +572,6 @@ export class RDb3Root implements Spi.DbTreeRoot {
             this.getOrCreateMetadata('').incomplete = false;
         }
     }
-
-    // TODO rewrite this completely
-    /*
-    handleQueryChange(id :string, path :string, val :any, prog :number) {
-        var def = this.queries[id];
-        if (!def) {
-            // TODO stale query, send unsubscribe again?
-            return;
-        }
-        var subp = path.substr(def.path.length);
-        var nv :any = val;
-        var sp = splitUrl(subp);
-        sp.splice(0,1);
-        while (sp.length) {
-            var nnv :any = {};
-            nnv[sp.pop()] = nv;
-            nnv.$i = true;
-            nv = nnv;
-        }
-        nv.$l = !def.done;
-        
-        if (!this.data['q'+id]) this.data['q'+id] = {};
-        nv['$sorter'] = this.data['q'+id]['$sorter'] = def.makeSorter();
-
-        var fnv :any = {};
-        fnv['q' + id] = nv;
-        fnv.$i = true;
-
-        var state = new MergeState();
-        state.writeVersion = prog;
-        this.merge('/qry__' + id, nv, this.data['q'+id], state);
-
-        delete nv.$l;
-        this.data = fnv;
-
-        if (def.limit) {
-            var acdata = this.data['q'+id];
-            // TODO replace with query metadata
-            var ks = Object.keys(acdata); // getKeysOrdered(acdata);
-            if (ks.length > def.limit) {
-                var torem :any = {};
-                while (ks.length > def.limit) {
-                    var k = def.limitLast ? ks.shift() : ks.pop();
-                    torem[k] = null;
-                }
-                torem.$i = true;
-
-                fnv = {};
-                fnv['q' + id] = torem;
-                fnv.$i = true;
-                // TODO what to pass here as a parentval??
-                // TODO probably here the sversion should not be prog, given that the deletion are based on the current situation
-                this.merge('/qry__' + id, torem, this.data['q'+id], state);
-                //this.recurseApplyBroadcast(torem, this.data['q'+id], fnv, '/qry__'+id, prog, {}, def.path);
-                this.data = fnv;
-            }
-        }
-    }
-    */
 
     merge(path :string, newval :any, oldval :any, state :MergeState, querySub? :QuerySubscription) {
         var sub = this.subscriptions[path];
@@ -1546,9 +1514,10 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     */
     set(value: any, onComplete?: (error: any) => void): void {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
-        //this.root.subscribe(this.url);
+        this.root.startingWrite(this.url);
         var prog = this.root.nextProg();
         this.root.send('s', this.url, value, prog, (ack:string)=>{
+            this.root.doneWrite(this.url);
             if (onComplete) {
                 if (ack == 'k') {
                     onComplete(null);
@@ -1566,9 +1535,10 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     */
     update(value: any, onComplete?: (error: any) => void): void {
         // Keep this data live, otherwise it could be deleted accidentally and/or overwritten with an older version
-        //this.root.subscribe(this.url);
+        this.root.startingWrite(this.url);
         var prog = this.root.nextProg();
         this.root.send('m', this.url, value, prog, (ack:string)=>{
+            this.root.doneWrite(this.url);
             if (onComplete) {
                 if (ack == 'k') {
                     onComplete(null);
