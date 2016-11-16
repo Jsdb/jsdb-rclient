@@ -965,6 +965,31 @@ describe('RDb3Client >', () => {
                 }
             });
 
+            it('Should send correct value', ()=>{
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var value :any = null;
+                ref.on('value', (data) => {
+                    value = data.val();
+                });
+
+                var adds: Client.RDb3Snap[] = [];
+                ref.on('child_added', (data) => adds.push(data));
+
+                root.handleChange('/list/a', { val: 1 }, dummyProg++, '1a');
+                root.handleChange('/list/b', { val: 2 }, dummyProg++, '1a');
+                root.handleChange('/list/c', { val: 3 }, dummyProg++, '1a');
+
+                assert("Received child_added", adds, is.array.withLength(3));
+                assert("Value events not sent yet", value, is.falsey);
+
+                root.receivedQueryDone({q:'1a'});
+
+                assert("Value events sent correctly", value, is.strictly.object.matching({a:is.object, b:is.object, c:is.object}));
+            });            
+
             it('Should notify query of child_changed from nested', ()=>{
                 var ref = root.getUrl('/list');
                 ref = ref.orderByChild('val');
@@ -992,6 +1017,77 @@ describe('RDb3Client >', () => {
                 for (var i = 0; i < rems.length; i++) {
                     assert("Received removed snapshots does not expose url meta-path", rems[i].ref().url.substr(0,6), '/list/');
                 }
+            });
+
+            it.skip('Should not create interference with two queries', ()=>{
+                var baseref = root.getUrl('/list');
+                var ref1 = baseref.orderByChild('val');
+                var ref2 = baseref.orderByChild('val');
+                (<Client.QuerySubscription>ref1.getSubscription()).id = '1a';
+                (<Client.QuerySubscription>ref2.getSubscription()).id = '2a';
+
+                var value1 :any = null;
+                var value2 :any = null;
+                ref1.on('value', (data) => { value1 = data.val(); });
+                ref2.on('value', (data) => { value2 = data.val(); });
+
+                var adds1: Client.RDb3Snap[] = [];
+                var adds2: Client.RDb3Snap[] = [];
+                ref1.on('child_added', (data) => adds1.push(data));
+                ref2.on('child_added', (data) => adds2.push(data));
+
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '1a');
+                assert("Received child_added", adds1, is.array.withLength(3));
+                for (var i = 0; i < adds1.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", adds1[i].ref().url.substr(0,6), '/list/');
+                }
+                assert("Value events not sent yet", value1, is.falsey);
+
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '2a');
+                assert("Received child_added", adds2, is.array.withLength(3));
+                for (var i = 0; i < adds2.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", adds2[i].ref().url.substr(0,6), '/list/');
+                }
+                assert("Value events not sent yet", value2, is.falsey);
+
+                root.receivedQueryDone({q:'1a'});
+                assert("Value events sent correctly", value1, is.strictly.object.matching({a:is.object, b:is.object, c:is.object}));
+                root.receivedQueryDone({q:'2a'});
+                assert("Value events sent correctly", value2, is.strictly.object.matching({a:is.object, b:is.object, c:is.object}));
+
+                var rems1: Client.RDb3Snap[] = [];
+                var chng1: Client.RDb3Snap[] = [];
+                var rems2: Client.RDb3Snap[] = [];
+                var chng2: Client.RDb3Snap[] = [];
+                ref1.on('child_removed', (data) => rems1.push(data));
+                ref1.on('child_changed', (data) => chng1.push(data));
+                ref2.on('child_removed', (data) => rems2.push(data));
+                ref2.on('child_changed', (data) => chng2.push(data));
+
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 4 }, $i:true }, dummyProg++, '1a');
+                assert("Received child_changed", chng1, is.array.withLength(2));
+                for (var i = 0; i < chng1.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", chng1[i].ref().url.substr(0,6), '/list/');
+                }
+
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 4 }, $i:true }, dummyProg++, '2a');
+                assert("Received child_changed", chng2, is.array.withLength(2));
+                for (var i = 0; i < chng2.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", chng2[i].ref().url.substr(0,6), '/list/');
+                }
+
+                root.handleChange('/list', { b: { val: 4 } }, dummyProg++, '1a');
+                assert("Received child_removed", rems1, is.array.withLength(2));
+                for (var i = 0; i < rems1.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", rems1[i].ref().url.substr(0,6), '/list/');
+                }
+
+                root.handleChange('/list', { b: { val: 4 } }, dummyProg++, '2a');
+                assert("Received child_removed", rems2, is.array.withLength(2));
+                for (var i = 0; i < rems2.length; i++) {
+                    assert("Received snapshots does not expose url meta-path", rems2[i].ref().url.substr(0,6), '/list/');
+                }
+                
             });
         });
 

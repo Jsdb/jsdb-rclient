@@ -329,8 +329,8 @@ export class RDb3Root implements Spi.DbTreeRoot {
         if (typeof(def.equals) !== 'undefined') {
             sdef.equals = def.equals;
         }
-        if (def.valuein) {
-            sdef.valuein = def.valuein;
+        if (def.valueIn) {
+            sdef.valueIn = def.valueIn;
         }
         if (typeof(def.from) !== 'undefined') {
             sdef.from = def.from;
@@ -795,11 +795,11 @@ export class Subscription {
             var added :boolean[] = [];
             for (var i = 0; i < modified.length; i++) {
                 var k = modified[i];
-                if (oldval && typeof(oldval[k]) !== 'undefined') {
-                    if (!newval || typeof(newval[k]) === 'undefined') {
+                if (oldval && typeof(oldval[k]) !== 'undefined' && oldval[k] !== null) {
+                    if (!newval || newval[k] === null || typeof(newval[k]) === 'undefined') {
                         added[i] = false;
                     }
-                } else if (newval && typeof(newval[k]) !== 'undefined') {
+                } else if (newval && typeof(newval[k]) !== 'undefined' && newval[k] !== null) {
                     added[i] = true;
                 }
             }
@@ -883,7 +883,7 @@ export class QuerySubscription extends Subscription {
     from: string | number;
     to: string | number;
     equals: string | number;
-    valuein: string[] | number[];
+    valueIn: string[] | number[];
     limit: number = null;
     limitLast = false;
 
@@ -894,15 +894,15 @@ export class QuerySubscription extends Subscription {
     myData :any = {};
     myMeta :Metadata = new Metadata();
 
-    constructor(oth: Subscription | QuerySubscription) {
-        super(oth.root, oth.path);
+    constructor(root :RDb3Root, path :string, oth: QuerySubscription) {
+        super(root, path);
         this.myMeta.incomplete = true;
-        if (oth instanceof QuerySubscription) {
+        if (oth) {
             this.compareField = oth.compareField;
             this.from = oth.from;
             this.to = oth.to;
             this.equals = oth.equals;
-            this.valuein = oth.valuein;
+            this.valueIn = oth.valueIn;
             this.limit = oth.limit;
             this.limitLast = oth.limitLast;
             this.sortField = oth.sortField;
@@ -942,11 +942,16 @@ export class QuerySubscription extends Subscription {
 
 
     // We handle this a bit differently for queries
+    // TODO this whole idea is broken : if we have two queries on the same path, 
+    // they will receive a different state at this call, and update their own mydata
+    // in different way.
     checkHandlers(meta :Metadata, newval :any, oldval :any, modified :string[], force :boolean) :EventsBatch {
         // Copy from new val to my new val, only own values
         var mynewval :any = {};
         // TODO maybe use modified?
         var nks = Object.getOwnPropertyNames(newval);
+        //var nks = modified; 
+
         var mymodifieds :string[] = [];
         for (var i = 0; i < nks.length; i++) {
             var k = nks[i];
@@ -1002,6 +1007,7 @@ export class QuerySubscription extends Subscription {
     queryExit(path :string) {
         var subp = path.substr(this.path.length);
         var leaf = Utils.leafPath(subp);
+
         var mynewval :any = {};
         mynewval[leaf] = null;
 
@@ -1011,7 +1017,8 @@ export class QuerySubscription extends Subscription {
         this.myData = mynewval;
 
         // Forward to super.checkHandlers using my meta and my values
-        super.checkHandlers(this.myMeta, this.myData, myoldval, [leaf], false);
+        var batch = super.checkHandlers(this.myMeta, this.myData, myoldval, [leaf], false);
+        batch.send();
     }
 
     makeSorter() :SortFunction {
@@ -1416,7 +1423,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     
     private subQuery() {
         var ret = new RDb3Tree(this.root, this.url);
-        ret.qsub = new QuerySubscription(this.getSubscription());
+        ret.qsub = new QuerySubscription(this.root, this.url, this.qsub);
         return ret;
     }
 
@@ -1471,7 +1478,7 @@ export class RDb3Tree implements Spi.DbTree, Spi.DbTreeQuery {
     */
     valueIn(values: string[]| number[], key?: string): RDb3Tree {
         var ret = this.subQuery();
-        ret.qsub.valuein = values;
+        ret.qsub.valueIn = values;
         return ret;
     }
 
