@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161108_040725_master_1.0.0_828aaf7
+ * TSDB remote client 20161116_041904_master_1.0.0_428e2ed
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161108_040725_master_1.0.0_828aaf7';
+    exports.VERSION = '20161116_041904_master_1.0.0_428e2ed';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -321,8 +321,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (typeof (def.equals) !== 'undefined') {
                 sdef.equals = def.equals;
             }
-            if (def.valuein) {
-                sdef.valuein = def.valuein;
+            if (def.valueIn) {
+                sdef.valueIn = def.valueIn;
             }
             if (typeof (def.from) !== 'undefined') {
                 sdef.from = def.from;
@@ -753,12 +753,12 @@ var __extends = (this && this.__extends) || function (d, b) {
                 var added = [];
                 for (var i = 0; i < modified.length; i++) {
                     var k = modified[i];
-                    if (oldval && typeof (oldval[k]) !== 'undefined') {
-                        if (!newval || typeof (newval[k]) === 'undefined') {
+                    if (oldval && typeof (oldval[k]) !== 'undefined' && oldval[k] !== null) {
+                        if (!newval || newval[k] === null || typeof (newval[k]) === 'undefined') {
                             added[i] = false;
                         }
                     }
-                    else if (newval && typeof (newval[k]) !== 'undefined') {
+                    else if (newval && typeof (newval[k]) !== 'undefined' && newval[k] !== null) {
                         added[i] = true;
                     }
                 }
@@ -831,8 +831,8 @@ var __extends = (this && this.__extends) || function (d, b) {
     var progQId = 1;
     var QuerySubscription = (function (_super) {
         __extends(QuerySubscription, _super);
-        function QuerySubscription(oth) {
-            _super.call(this, oth.root, oth.path);
+        function QuerySubscription(root, path, oth) {
+            _super.call(this, root, path);
             this.id = (progQId++) + 'a';
             this.compareField = null;
             this.limit = null;
@@ -841,12 +841,12 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.myData = {};
             this.myMeta = new Metadata();
             this.myMeta.incomplete = true;
-            if (oth instanceof QuerySubscription) {
+            if (oth) {
                 this.compareField = oth.compareField;
                 this.from = oth.from;
                 this.to = oth.to;
                 this.equals = oth.equals;
-                this.valuein = oth.valuein;
+                this.valueIn = oth.valueIn;
                 this.limit = oth.limit;
                 this.limitLast = oth.limitLast;
                 this.sortField = oth.sortField;
@@ -878,11 +878,15 @@ var __extends = (this && this.__extends) || function (d, b) {
             return _super.prototype.findByType.call(this, evtype);
         };
         // We handle this a bit differently for queries
+        // TODO this whole idea is broken : if we have two queries on the same path, 
+        // they will receive a different state at this call, and update their own mydata
+        // in different way.
         QuerySubscription.prototype.checkHandlers = function (meta, newval, oldval, modified, force) {
             // Copy from new val to my new val, only own values
             var mynewval = {};
             // TODO maybe use modified?
             var nks = Object.getOwnPropertyNames(newval);
+            //var nks = modified; 
             var mymodifieds = [];
             for (var i = 0; i < nks.length; i++) {
                 var k = nks[i];
@@ -936,7 +940,8 @@ var __extends = (this && this.__extends) || function (d, b) {
             setPrototypeOf(mynewval, myoldval);
             this.myData = mynewval;
             // Forward to super.checkHandlers using my meta and my values
-            _super.prototype.checkHandlers.call(this, this.myMeta, this.myData, myoldval, [leaf], false);
+            var batch = _super.prototype.checkHandlers.call(this, this.myMeta, this.myData, myoldval, [leaf], false);
+            batch.send();
         };
         QuerySubscription.prototype.makeSorter = function () {
             var _this = this;
@@ -1334,7 +1339,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         RDb3Tree.prototype.subQuery = function () {
             var ret = new RDb3Tree(this.root, this.url);
-            ret.qsub = new QuerySubscription(this.getSubscription());
+            ret.qsub = new QuerySubscription(this.root, this.url, this.qsub);
             return ret;
         };
         /**
@@ -1384,7 +1389,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         */
         RDb3Tree.prototype.valueIn = function (values, key) {
             var ret = this.subQuery();
-            ret.qsub.valuein = values;
+            ret.qsub.valueIn = values;
             return ret;
         };
         /**

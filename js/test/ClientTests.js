@@ -764,6 +764,24 @@ describe('RDb3Client >', function () {
                     tsmatchers_1.assert("Received snapshots does not expose url meta-path", rems[i].ref().url.substr(0, 6), '/list/');
                 }
             });
+            it('Should send correct value', function () {
+                var ref = root.getUrl('/list');
+                ref = ref.orderByChild('val');
+                ref.getSubscription().id = '1a';
+                var value = null;
+                ref.on('value', function (data) {
+                    value = data.val();
+                });
+                var adds = [];
+                ref.on('child_added', function (data) { return adds.push(data); });
+                root.handleChange('/list/a', { val: 1 }, dummyProg++, '1a');
+                root.handleChange('/list/b', { val: 2 }, dummyProg++, '1a');
+                root.handleChange('/list/c', { val: 3 }, dummyProg++, '1a');
+                tsmatchers_1.assert("Received child_added", adds, tsmatchers_1.is.array.withLength(3));
+                tsmatchers_1.assert("Value events not sent yet", value, tsmatchers_1.is.falsey);
+                root.receivedQueryDone({ q: '1a' });
+                tsmatchers_1.assert("Value events sent correctly", value, tsmatchers_1.is.strictly.object.matching({ a: tsmatchers_1.is.object, b: tsmatchers_1.is.object, c: tsmatchers_1.is.object }));
+            });
             it('Should notify query of child_changed from nested', function () {
                 var ref = root.getUrl('/list');
                 ref = ref.orderByChild('val');
@@ -783,6 +801,65 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Received child_removed", rems, tsmatchers_1.is.array.withLength(1));
                 for (var i = 0; i < rems.length; i++) {
                     tsmatchers_1.assert("Received removed snapshots does not expose url meta-path", rems[i].ref().url.substr(0, 6), '/list/');
+                }
+            });
+            it.skip('Should not create interference with two queries', function () {
+                var baseref = root.getUrl('/list');
+                var ref1 = baseref.orderByChild('val');
+                var ref2 = baseref.orderByChild('val');
+                ref1.getSubscription().id = '1a';
+                ref2.getSubscription().id = '2a';
+                var value1 = null;
+                var value2 = null;
+                ref1.on('value', function (data) { value1 = data.val(); });
+                ref2.on('value', function (data) { value2 = data.val(); });
+                var adds1 = [];
+                var adds2 = [];
+                ref1.on('child_added', function (data) { return adds1.push(data); });
+                ref2.on('child_added', function (data) { return adds2.push(data); });
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '1a');
+                tsmatchers_1.assert("Received child_added", adds1, tsmatchers_1.is.array.withLength(3));
+                for (var i = 0; i < adds1.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", adds1[i].ref().url.substr(0, 6), '/list/');
+                }
+                tsmatchers_1.assert("Value events not sent yet", value1, tsmatchers_1.is.falsey);
+                root.handleChange('/list', { a: { val: 1 }, b: { val: 2 }, c: { val: 3 } }, dummyProg++, '2a');
+                tsmatchers_1.assert("Received child_added", adds2, tsmatchers_1.is.array.withLength(3));
+                for (var i = 0; i < adds2.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", adds2[i].ref().url.substr(0, 6), '/list/');
+                }
+                tsmatchers_1.assert("Value events not sent yet", value2, tsmatchers_1.is.falsey);
+                root.receivedQueryDone({ q: '1a' });
+                tsmatchers_1.assert("Value events sent correctly", value1, tsmatchers_1.is.strictly.object.matching({ a: tsmatchers_1.is.object, b: tsmatchers_1.is.object, c: tsmatchers_1.is.object }));
+                root.receivedQueryDone({ q: '2a' });
+                tsmatchers_1.assert("Value events sent correctly", value2, tsmatchers_1.is.strictly.object.matching({ a: tsmatchers_1.is.object, b: tsmatchers_1.is.object, c: tsmatchers_1.is.object }));
+                var rems1 = [];
+                var chng1 = [];
+                var rems2 = [];
+                var chng2 = [];
+                ref1.on('child_removed', function (data) { return rems1.push(data); });
+                ref1.on('child_changed', function (data) { return chng1.push(data); });
+                ref2.on('child_removed', function (data) { return rems2.push(data); });
+                ref2.on('child_changed', function (data) { return chng2.push(data); });
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 4 }, $i: true }, dummyProg++, '1a');
+                tsmatchers_1.assert("Received child_changed", chng1, tsmatchers_1.is.array.withLength(2));
+                for (var i = 0; i < chng1.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", chng1[i].ref().url.substr(0, 6), '/list/');
+                }
+                root.handleChange('/list', { a: { val: 3 }, b: { val: 4 }, $i: true }, dummyProg++, '2a');
+                tsmatchers_1.assert("Received child_changed", chng2, tsmatchers_1.is.array.withLength(2));
+                for (var i = 0; i < chng2.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", chng2[i].ref().url.substr(0, 6), '/list/');
+                }
+                root.handleChange('/list', { b: { val: 4 } }, dummyProg++, '1a');
+                tsmatchers_1.assert("Received child_removed", rems1, tsmatchers_1.is.array.withLength(2));
+                for (var i = 0; i < rems1.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", rems1[i].ref().url.substr(0, 6), '/list/');
+                }
+                root.handleChange('/list', { b: { val: 4 } }, dummyProg++, '2a');
+                tsmatchers_1.assert("Received child_removed", rems2, tsmatchers_1.is.array.withLength(2));
+                for (var i = 0; i < rems2.length; i++) {
+                    tsmatchers_1.assert("Received snapshots does not expose url meta-path", rems2[i].ref().url.substr(0, 6), '/list/');
                 }
             });
         });

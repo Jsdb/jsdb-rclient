@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161108_040725_master_1.0.0_828aaf7
+ * TSDB remote client 20161116_041904_master_1.0.0_428e2ed
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -117,13 +117,13 @@ export declare class QuerySubscription extends Subscription {
     from: string | number;
     to: string | number;
     equals: string | number;
-    valuein: string[] | number[];
+    valueIn: string[] | number[];
     limit: number;
     limitLast: boolean;
     sortField: string;
     myData: any;
     myMeta: Metadata;
-    constructor(oth: Subscription | QuerySubscription);
+    constructor(root: RDb3Root, path: string, oth: QuerySubscription);
     add(cb: Handler): void;
     remove(cb: Handler): void;
     subscribe(): void;
