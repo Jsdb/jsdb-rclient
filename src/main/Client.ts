@@ -490,8 +490,12 @@ export class RDb3Root implements Spi.DbTreeRoot {
     }
 
     getValue(url: string | string[]) :any {
-        var ret = findChain(url, this.data, true, false);
-        return ret.pop();
+        try {
+            var ret = findChain(url, this.data, true, false);
+            return ret.pop();
+        } catch (e) {
+            return null;
+        }
     }
 
     getOrCreateMetadata(path :string, initing = true) :Metadata {

@@ -547,6 +547,14 @@ describe('RDb3Client >', function () {
                 tsmatchers_1.assert("Sibling should not be valid anymore", root.getValue('/node/b'), tsmatchers_1.is.falsey);
                 tsmatchers_1.assert("Value should still be there", root.getValue('/node/a'), tsmatchers_1.is.object.matching({ val: 1 }));
             });
+            it('Should send value for non existing value', function () {
+                root.handleChange('/node', null, dummyProg++);
+                var ref = root.getUrl('/node/sub');
+                var snap;
+                var cb = ref.on('value', function (data) { return snap = data; });
+                tsmatchers_1.assert("Received event", snap, tsmatchers_1.is.truthy);
+                tsmatchers_1.assert("Snapshot is not existing", snap.exists(), false);
+            });
             /*
             it('Should clean up parents when setting null on grandchild', ()=>{
                 root.handleChange('/node', {a:{val:1}}, dummyProg++);

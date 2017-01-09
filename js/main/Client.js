@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20161116_041904_master_1.0.0_428e2ed
+ * TSDB remote client 20170109_003623_master_1.0.0_710b551
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -171,7 +171,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20161116_041904_master_1.0.0_428e2ed';
+    exports.VERSION = '20170109_003623_master_1.0.0_710b551';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -471,8 +471,13 @@ var __extends = (this && this.__extends) || function (d, b) {
             //delete this.data['q' + id];
         };
         RDb3Root.prototype.getValue = function (url) {
-            var ret = findChain(url, this.data, true, false);
-            return ret.pop();
+            try {
+                var ret = findChain(url, this.data, true, false);
+                return ret.pop();
+            }
+            catch (e) {
+                return null;
+            }
         };
         RDb3Root.prototype.getOrCreateMetadata = function (path, initing) {
             if (initing === void 0) { initing = true; }

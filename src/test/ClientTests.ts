@@ -684,6 +684,16 @@ describe('RDb3Client >', () => {
                 assert("Value should still be there", root.getValue('/node/a'), is.object.matching({val:1}));
             });
 
+            it('Should send value for non existing value', ()=>{
+                root.handleChange('/node', null, dummyProg++);
+
+                var ref = root.getUrl('/node/sub/sub');
+                var snap: Client.RDb3Snap;
+                var cb = ref.on('value', (data) => snap = data);
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is not existing", snap.exists(), false);
+            });
+
             /*
             it('Should clean up parents when setting null on grandchild', ()=>{
                 root.handleChange('/node', {a:{val:1}}, dummyProg++);
