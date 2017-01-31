@@ -684,12 +684,46 @@ describe('RDb3Client >', () => {
                 assert("Value should still be there", root.getValue('/node/a'), is.object.matching({val:1}));
             });
 
-            it('Should send value for non existing value', ()=>{
+            it('Should send null value for sub non existing value early', ()=>{
                 root.handleChange('/node', null, dummyProg++);
 
                 var ref = root.getUrl('/node/sub/sub');
                 var snap: Client.RDb3Snap;
                 var cb = ref.on('value', (data) => snap = data);
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is not existing", snap.exists(), false);
+            });
+
+            it('Should send null value for sub of non existing value after', ()=>{
+                var ref = root.getUrl('/node/sub/sub');
+                var snap: Client.RDb3Snap;
+                var cb = ref.on('value', (data) => snap = data);
+
+                root.handleChange('/node', null, dummyProg++);
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is not existing", snap.exists(), false);
+            });
+
+            it('Should send null value non existing value early', ()=>{
+                root.handleChange('/node/sub/sub', null, dummyProg++);
+
+                var ref = root.getUrl('/node/sub/sub');
+                var snap: Client.RDb3Snap;
+                var cb = ref.on('value', (data) => snap = data);
+
+                assert("Received event", snap, is.truthy);
+                assert("Snapshot is not existing", snap.exists(), false);
+            });
+
+            it('Should send null value of non existing value after', ()=>{
+                var ref = root.getUrl('/node/sub/sub');
+                var snap: Client.RDb3Snap;
+                var cb = ref.on('value', (data) => snap = data);
+
+                root.handleChange('/node/sub/sub', null, dummyProg++);
+
                 assert("Received event", snap, is.truthy);
                 assert("Snapshot is not existing", snap.exists(), false);
             });

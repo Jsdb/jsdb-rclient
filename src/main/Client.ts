@@ -74,6 +74,12 @@ export class MergeState {
         return ret;
     }
 
+    notifySubsWithNulls(root :RDb3Root, path :string) {
+        root.findSubSubscriptions(path, (sub)=>{
+            this.batches.push(sub.checkHandlers(null, null, null, null, true));
+        });
+    }
+
     sendEvents() {
         for (var i = 0; i < this.batches.length; i++) {
             this.batches[i].send();
@@ -367,6 +373,12 @@ export class RDb3Root implements Spi.DbTreeRoot {
         this.checkUncovered(path);
     }
 
+    findSubSubscriptions(path :string, found :(s :Subscription)=>void) {
+        for (var k in this.subscriptions) {
+            if (k.indexOf(path) == 0) found(this.subscriptions[k]);
+        }
+    }
+
     doneWrite(url :string) {
         this.ongoingWrite[url] = (this.ongoingWrite[url] || 0) - 1;
         if (this.ongoingWrite[url] <= 0) delete this.ongoingWrite[url];
@@ -653,13 +665,12 @@ export class RDb3Root implements Spi.DbTreeRoot {
                     if (newval[k] && !newval[k].$i) {
                         meta.versions[k] = state.writeVersion;
                     }
-                    if (this.merge(path + '/' + k, newval[k], oldval ? oldval[k] : null, substate, querySub)) {
+                    var oldvalk = (typeof(oldval) === 'object') ? oldval[k] : oldval;
+                    if (this.merge(path + '/' + k, newval[k], oldvalk, substate, querySub)) {
                         modifieds.push(k);
                         if (newval[k] === null) {
                             //meta.knownNull = true;
                             newval[k] = undefined;
-                            // TODO KNOWN_NULL is nother thing to clean up from snapshot.val, try to find another way
-                            //newval[k] = KNOWN_NULL;
                         }
                     }
                 }
@@ -702,6 +713,10 @@ export class RDb3Root implements Spi.DbTreeRoot {
         } else {
             // We are handling a leaf value
             if (sub) state.batches.push(sub.checkHandlers(null, newval, oldval, null, false));
+            // TODO search sub-subscriptions and send null values there
+            if (newval === null) {
+                state.notifySubsWithNulls(this, path + '/')
+            }
             // TODO this should never happen, value of a query with a single leaf primitive value??
             if (atQuery) state.batches.push(querySub.checkHandlers(null, newval, oldval, null, false));
             return newval != oldval;

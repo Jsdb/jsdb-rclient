@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20170109_003623_master_1.0.0_710b551
+ * TSDB remote client 20170109_062124_master_1.0.0_725b200
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -81,6 +81,12 @@ var __extends = (this && this.__extends) || function (d, b) {
             ret.highest = this.highest;
             ret.batches = this.batches;
             return ret;
+        };
+        MergeState.prototype.notifySubsWithNulls = function (root, path) {
+            var _this = this;
+            root.findSubSubscriptions(path, function (sub) {
+                _this.batches.push(sub.checkHandlers(null, null, null, null, true));
+            });
         };
         MergeState.prototype.sendEvents = function () {
             for (var i = 0; i < this.batches.length; i++) {
@@ -171,7 +177,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20170109_003623_master_1.0.0_710b551';
+    exports.VERSION = '20170109_062124_master_1.0.0_725b200';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -353,6 +359,12 @@ var __extends = (this && this.__extends) || function (d, b) {
         RDb3Root.prototype.unsubscribe = function (path) {
             delete this.subscriptions[path];
             this.checkUncovered(path);
+        };
+        RDb3Root.prototype.findSubSubscriptions = function (path, found) {
+            for (var k in this.subscriptions) {
+                if (k.indexOf(path) == 0)
+                    found(this.subscriptions[k]);
+            }
         };
         RDb3Root.prototype.doneWrite = function (url) {
             this.ongoingWrite[url] = (this.ongoingWrite[url] || 0) - 1;
@@ -621,7 +633,8 @@ var __extends = (this && this.__extends) || function (d, b) {
                         if (newval[k] && !newval[k].$i) {
                             meta.versions[k] = state.writeVersion;
                         }
-                        if (this.merge(path + '/' + k, newval[k], oldval ? oldval[k] : null, substate, querySub)) {
+                        var oldvalk = (typeof (oldval) === 'object') ? oldval[k] : oldval;
+                        if (this.merge(path + '/' + k, newval[k], oldvalk, substate, querySub)) {
                             modifieds.push(k);
                             if (newval[k] === null) {
                                 //meta.knownNull = true;
@@ -665,6 +678,10 @@ var __extends = (this && this.__extends) || function (d, b) {
                 // We are handling a leaf value
                 if (sub)
                     state.batches.push(sub.checkHandlers(null, newval, oldval, null, false));
+                // TODO search sub-subscriptions and send null values there
+                if (newval === null) {
+                    state.notifySubsWithNulls(this, path + '/');
+                }
                 // TODO this should never happen, value of a query with a single leaf primitive value??
                 if (atQuery)
                     state.batches.push(querySub.checkHandlers(null, newval, oldval, null, false));
