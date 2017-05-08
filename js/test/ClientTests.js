@@ -763,10 +763,15 @@ describe('RDb3Client >', function () {
             root = new Client.RDb3Root(null, 'http://ciao/');
         });
         describe('Events >', function () {
-            it('Should notify query of child_added, child_changed and child_removed', function () {
+            it('Should notify query of counted, child_added, child_changed and child_removed', function () {
                 var ref = root.getUrl('/list');
                 ref = ref.orderByChild('val');
                 ref.getSubscription().id = '1a';
+                var counted = [];
+                ref.on('counted', function (data) { return counted.push(data); });
+                root.receivedQueryCount({ q: '1a', c: 5 });
+                tsmatchers_1.assert("Received counted", counted, tsmatchers_1.is.array.withLength(1));
+                tsmatchers_1.assert("Correct counted", counted[0].val(), 5);
                 var value = null;
                 ref.on('value', function (data) {
                     value = data.val();

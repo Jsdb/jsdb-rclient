@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20170109_062124_master_1.0.0_725b200
+ * TSDB remote client 20170508_052420_master_1.0.0_42e65e2
  */
 import { Spi, Api } from 'jsdb';
 export declare type SortFunction = (a: any, b: any) => number;
@@ -72,6 +72,7 @@ export declare class RDb3Root implements Spi.DbTreeRoot {
     receivedValue(msg: any): void;
     receivedQueryDone(msg: any): void;
     receivedQueryExit(msg: any): void;
+    receivedQueryCount(msg: any): void;
     send(...args: any[]): void;
     sendSubscribe(path: string): void;
     sendUnsubscribe(path: string): void;
@@ -124,6 +125,7 @@ export declare class QuerySubscription extends Subscription {
     limitLast: boolean;
     sortField: string;
     myData: any;
+    myCount: number;
     myMeta: Metadata;
     constructor(root: RDb3Root, path: string, oth: QuerySubscription);
     add(cb: Handler): void;
@@ -135,6 +137,7 @@ export declare class QuerySubscription extends Subscription {
     findByType(evtype: string): Handler[];
     checkHandlers(meta: Metadata, newval: any, oldval: any, modified: string[], force: boolean): EventsBatch;
     markDone(): void;
+    queryCount(num: number): void;
     queryExit(path: string): void;
     makeSorter(): SortFunction;
 }

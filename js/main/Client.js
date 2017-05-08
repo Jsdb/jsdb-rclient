@@ -1,5 +1,5 @@
 /**
- * TSDB remote client 20170109_062124_master_1.0.0_725b200
+ * TSDB remote client 20170508_052420_master_1.0.0_42e65e2
  */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
@@ -177,7 +177,7 @@ var __extends = (this && this.__extends) || function (d, b) {
         return Metadata;
     }());
     exports.Metadata = Metadata;
-    exports.VERSION = '20170109_062124_master_1.0.0_725b200';
+    exports.VERSION = '20170508_052420_master_1.0.0_42e65e2';
     var noOpDbg = function () {
         var any = [];
         for (var _i = 0; _i < arguments.length; _i++) {
@@ -219,6 +219,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             this.getOrCreateMetadata('').incomplete = true;
             if (sock) {
                 sock.on('v', function (msg) { return _this.receivedValue(msg); });
+                sock.on('qc', function (msg) { return _this.receivedQueryCount(msg); });
                 sock.on('qd', function (msg) { return _this.receivedQueryDone(msg); });
                 sock.on('qx', function (msg) { return _this.receivedQueryExit(msg); });
                 sock.on('connect', function () {
@@ -297,6 +298,13 @@ var __extends = (this && this.__extends) || function (d, b) {
                 return;
             qdef.queryExit(msg.p);
         };
+        RDb3Root.prototype.receivedQueryCount = function (msg) {
+            dbgIo('Received QueryCount v %s for "%s" : %o', msg.n, msg.q, msg);
+            var qdef = this.queries[msg.q];
+            if (!qdef)
+                return;
+            qdef.queryCount(msg.c);
+        };
         RDb3Root.prototype.send = function () {
             var args = [];
             for (var _i = 0; _i < arguments.length; _i++) {
@@ -336,7 +344,7 @@ var __extends = (this && this.__extends) || function (d, b) {
             if (typeof (def.to) !== 'undefined') {
                 sdef.to = def.to;
             }
-            if (def.limit) {
+            if (def.limit !== null) {
                 sdef.limit = def.limit;
                 sdef.limitLast = def.limitLast;
             }
@@ -952,6 +960,16 @@ var __extends = (this && this.__extends) || function (d, b) {
                 }
             }
         };
+        QuerySubscription.prototype.queryCount = function (num) {
+            this.myCount = num;
+            var valueHandlers = this.findByType('counted');
+            if (valueHandlers.length) {
+                var event = [new RDb3Snap(num, this.root, this.path), null];
+                for (var i = 0; i < valueHandlers.length; i++) {
+                    valueHandlers[i].callback.apply(this.root, event);
+                }
+            }
+        };
         QuerySubscription.prototype.queryExit = function (path) {
             var subp = path.substr(this.path.length);
             var leaf = Utils.leafPath(subp);
@@ -1118,12 +1136,33 @@ var __extends = (this && this.__extends) || function (d, b) {
         };
         return ChildChangedCbHandler;
     }(Handler));
+    var CountedCbHandler = (function (_super) {
+        __extends(CountedCbHandler, _super);
+        function CountedCbHandler() {
+            _super.apply(this, arguments);
+        }
+        CountedCbHandler.prototype.hook = function () {
+            this.eventType = 'counted';
+            _super.prototype.hook.call(this);
+        };
+        CountedCbHandler.prototype.init = function () {
+            var sub = this.tree.getSubscription();
+            if (sub instanceof QuerySubscription) {
+                var cnt = sub.myCount;
+                if (typeof (cnt) !== 'undefined') {
+                    this.callback(new RDb3Snap(cnt, this.tree.root, this.tree.url, this.getMeta()));
+                }
+            }
+        };
+        return CountedCbHandler;
+    }(Handler));
     var cbHandlers = {
         value: ValueCbHandler,
         child_added: ChildAddedCbHandler,
         child_removed: ChildRemovedCbHandler,
         child_moved: ChildMovedCbHandler,
-        child_changed: ChildChangedCbHandler
+        child_changed: ChildChangedCbHandler,
+        counted: CountedCbHandler
     };
     var RDb3Snap = (function () {
         function RDb3Snap(data, root, url, meta) {
