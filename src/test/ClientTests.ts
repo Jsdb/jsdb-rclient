@@ -964,10 +964,17 @@ describe('RDb3Client >', () => {
         });
 
         describe('Events >', ()=>{
-            it('Should notify query of child_added, child_changed and child_removed', ()=>{
+            it('Should notify query of counted, child_added, child_changed and child_removed', ()=>{
                 var ref = root.getUrl('/list');
                 ref = ref.orderByChild('val');
                 (<Client.QuerySubscription>ref.getSubscription()).id = '1a';
+
+                var counted :Client.RDb3Snap[] = [];
+                ref.on('counted', (data) => counted.push(data));
+                root.receivedQueryCount({q:'1a',c:5});
+
+                assert("Received counted", counted, is.array.withLength(1));
+                assert("Correct counted", counted[0].val(), 5);
 
                 var value :any = null;
                 ref.on('value', (data) => {

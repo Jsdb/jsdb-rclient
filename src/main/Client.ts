@@ -215,6 +215,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         this.getOrCreateMetadata('').incomplete = true;
         if (sock) {
             sock.on('v', (msg:any)=>this.receivedValue(msg));
+            sock.on('qc', (msg:any)=>this.receivedQueryCount(msg));
             sock.on('qd', (msg:any)=>this.receivedQueryDone(msg));
             sock.on('qx', (msg:any)=>this.receivedQueryExit(msg));
             sock.on('connect', ()=>{
@@ -307,6 +308,13 @@ export class RDb3Root implements Spi.DbTreeRoot {
         qdef.queryExit(msg.p);
     }
 
+    receivedQueryCount(msg :any) {
+        dbgIo('Received QueryCount v %s for "%s" : %o', msg.n, msg.q, msg);
+        var qdef = this.queries[msg.q];
+        if (!qdef) return;
+        qdef.queryCount(msg.c);
+    }
+
     send(...args :any[]) {
         if (this.sock) {
             dbgIo('Sending %o', args);
@@ -344,7 +352,7 @@ export class RDb3Root implements Spi.DbTreeRoot {
         if (typeof(def.to) !== 'undefined') {
             sdef.to = def.to;
         }
-        if (def.limit) {
+        if (def.limit !== null) {
             sdef.limit = def.limit;
             sdef.limitLast = def.limitLast;
         }
@@ -911,6 +919,7 @@ export class QuerySubscription extends Subscription {
     //done = false;
 
     myData :any = {};
+    myCount :number;
     myMeta :Metadata = new Metadata();
 
     constructor(root :RDb3Root, path :string, oth: QuerySubscription) {
@@ -1017,6 +1026,17 @@ export class QuerySubscription extends Subscription {
         var valueHandlers = this.findByType('value');
         if (valueHandlers.length) {
             var event = [new RDb3Snap(this.myData, this.root, this.path), null];
+            for (var i = 0; i < valueHandlers.length; i++) {
+                valueHandlers[i].callback.apply(this.root, event);
+            }
+        }
+    }
+
+    queryCount(num :number) {
+        this.myCount = num;
+        var valueHandlers = this.findByType('counted');
+        if (valueHandlers.length) {
+            var event = [new RDb3Snap(num, this.root, this.path), null];
             for (var i = 0; i < valueHandlers.length; i++) {
                 valueHandlers[i].callback.apply(this.root, event);
             }
@@ -1182,6 +1202,24 @@ class ChildChangedCbHandler extends Handler {
     }
 }
 
+class CountedCbHandler extends Handler {
+    hook() {
+        this.eventType = 'counted';
+        super.hook();
+    }
+
+    init() {
+        var sub = this.tree.getSubscription();
+        if (sub instanceof QuerySubscription) {
+            var cnt = sub.myCount;
+            if (typeof(cnt) !== 'undefined') {
+                this.callback(new RDb3Snap(cnt, this.tree.root, this.tree.url, this.getMeta()));
+            }
+        }
+    }
+}
+
+
 interface CbHandlerCtor {
     new (
         callback: (dataSnapshot: RDb3Snap, prevChildName?: string) => void,
@@ -1195,9 +1233,9 @@ var cbHandlers = {
     child_added: ChildAddedCbHandler,
     child_removed: ChildRemovedCbHandler,
     child_moved: ChildMovedCbHandler,
-    child_changed: ChildChangedCbHandler
+    child_changed: ChildChangedCbHandler,
+    counted: CountedCbHandler
 }
-
 
 export class RDb3Snap implements Spi.DbTreeSnap {
     constructor(
